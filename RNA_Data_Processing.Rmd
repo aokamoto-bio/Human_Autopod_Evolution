@@ -1,0 +1,489 @@
+---
+title: "RNA_Data_Cluster_Processing"
+author: "Alexander Okamoto"
+date: "2025-5-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Human RNA-seq Data Analysis
+
+# Initial processing of RNA-seq sequencing data was performed on the Harvard FAS Cluster. Examples of the code run are included below. Note that software loading is not included as this will be specific to a given computational environment. Package versions are detailed in the Methods section of the paper. 
+
+
+# Prepare hg38 reference genome
+
+To align reads to a reference genome, I downloaded the relevant files from ensembl and ran the following script. References need to be generated for both STAR and RSEM.
+
+# download the "Genome sequence, primary assembly (GRCh38)" fasta file
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_29/GRCh38.primary_assembly.genome.fa.gz
+# download the annotations that correspond to it 
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_29/gencode.v29.annotation.gtf.gz
+
+# filter it as described in the note below
+```{bash, eval = FALSE}
+#generate human reference for STAR
+STAR \
+--runThreadN 8 \
+--runMode genomeGenerate \
+--genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/STAR_ensembl_hg38 \
+--genomeFastaFiles /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/GRCh38.primary_assembly.genome.fa \
+--sjdbGTFfile /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/gencode.v29.annotation.gtf \
+
+--sjdbOverhang 99 \
+
+#generate human reference for RSEM
+rsem-prepare-reference \
+--star --star-sjdboverhang 99 --gtf /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/gencode.v29.annotation.gtf \
+/n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/GRCh38.primary_assembly.genome.fa \
+/n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl 
+```
+
+# RNA data processing steps included:
+
+## Concatenate Files
+Each sample was sequenced multiple times, once on a MiSeq and twice on a Novaseq S4, to ensure that there are at least 20 million reads per sample. In order to process this data, I concatenated all the read files for a given sample. 
+
+## Adapter Trimming
+
+To trim adapters I used NGmerge (Gaspar et al. *Bioinformatics* 2018). The -e 30 parameter was chosen based on <https:/github.com/jsh58/NGmerge/issues/6>.
+
+## Remove ribosomal reads
+Ribodetector was used to remove ribosomal reads
+
+## Map reads to human genome 
+Reads were aligned to the hg38 human genome
+
+##Counts table generate
+RSEM was used to count reads uniquely mapped to genes
+
+## Here is the script that combines all this to fully process all samples:
+```{bash, eval = F}
+loc1="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220829_M06822_0175_000000000-DHHD2_i5revcomp/fastq/human_autopod"
+loc2="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220902_A00794_0684_BH25W7DSX5_SUB12606_dual_index/fastq/P232-233-234"
+loc3="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc4="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc5="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc6="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220930_A00794_0710_BHNGWYDSX3_SUB13180_Dual8_corrected/fastq/PREP0232"
+loc7="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221222_A00794_0761_AHHTVMDSX5_SUB13652/fastq/P232-233-234"
+
+#if needed, make directory for output concatenated reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_RNA" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/ exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_RNA
+fi
+
+#if needed, make directory for adapter trimmed reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads
+fi
+
+#if needed, make directory for mitochondria aligned reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Aligned" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Aligned exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Aligned
+fi
+
+#if needed, make directory for after removing mitochondrial reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered
+fi
+
+#if needed, make directory for STAR output
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output
+fi
+
+#start for loop for each sample
+for sample in 28841_HP1 28841_HM4 28841_FM2 28867_HP5 28867_FP3 29057_HP1 29057_HM4 29057_FM2 28769_HP5 28769_FP3 28906_HP1 28906_HM4 28841_HP2 28841_HM5 28841_FM3 28867_FP4 29057_HP2 29057_HM5 28769_HM1 28769_FP4 28906_HP2 28906_HM5 28841_HP3 28841_FP1 28841_FM4 28867_HM2 28867_FP5 29057_HP3 29057_FM4 28769_HM2 28769_FP5 28906_HP3 28906_FP1 28841_HP4 28841_FP2 28841_FM5 28867_HM3 28867_FM1 29057_HP4 29057_FP2 29057_FM5 28769_HM3 28769_FM1 28906_HP4 28906_FP2 28841_HP5 28841_FP3 28867_HP1 28867_HM4 28867_FM2 29057_HP5 29057_FP3 28769_HP1 28769_HM4 28769_FM2 28906_HP5 28906_FP3 28841_HM1 28841_FP4 28867_HP2 28867_HM5 28867_FM3 29057_HM1 29057_FP4 28769_HP2 28769_HM5 28769_FM3 28906_HM1 28906_FP4 28841_HM2 28841_FP5 28867_HP3 28867_FP1 28867_FM4 29057_HM2 28769_HP3 28769_FP1 28769_FM4 28906_HM2 28906_FP5 28841_HM3 28841_FM1 28867_HP4 28867_FP2 28867_FM5 29057_HM3 29057_FM1 28769_HP4 28769_FP2 28769_FM5 28906_HM3 28906_FM1 28906_FM2 28853_HP5 28853_FP3 28743_HP1 28743_HM4 28743_FM2 28670_HP5 28670_FP3 28662_HP1 28662_HM4 28662_FM2 28852_HP5 28906_FM3 28853_HM1 28853_FP4 28743_HP2 28743_HM5 28743_FM3 28670_HM1 28662_HP2 28662_HM5 28662_FM3 28852_HM1 28906_FM4 28853_HM2 28853_FP5 28743_HP3 28743_FP1 28743_FM4 28670_HM2 28670_FP5 28662_HP3 28662_FP1 28662_FM4 28852_HM2 28906_FM5 28853_HM3 28853_FM1 28743_HP4 28743_FP2 28743_FM5 28670_HM3 28670_FM1 28662_HP4 28662_FP2 28662_FM5 28852_HM3 28853_HP1 28853_HM4 28853_FM2 28743_HP5 28743_FP3 28670_HP1 28670_HM4 28670_FM2 28662_HP5 28662_FP3 28852_HP1 28852_HM4 28853_HP2 28853_HM5 28853_FM3 28743_HM1 28743_FP4 28670_HP2 28670_HM5 28670_FM3 28662_HM1 28662_FP4 28852_HP2 28852_HM5 28853_HP3 28853_FP1 28853_FM4 28743_HM2 28743_FP5 28670_HP3 28670_FP1 28670_FM4 28662_HM2 28662_FP5 28852_HP3 28852_FP1 28853_HP4 28853_FP2 28853_FM5 28743_HM3 28743_FM1 28670_HP4 28670_FP2 28670_FM5 28662_HM3 28662_FM1 28852_HP4 28852_FP2 28852_FP3 28693B_HP1 28693B_HM4 28693B_FM2 28693A_HP5 28693A_FP3 28852_FP4 28693B_HP2 28693B_HM5 28693B_FM3 28693A_HM1 28693A_FP4 28852_FP5 28693B_HP3 28693B_FP1 28693B_FM4 28693A_HM2 28693A_FP5 28852_FM1 28693B_HP4 28693B_FP2 28693B_FM5 28693A_HM3 28693A_FM1 28852_FM2 28693B_HP5 28693B_FP3 28693A_HP1 28693A_HM4 28693A_FM2 28852_FM3 28693B_HM1 28693B_FP4 28693A_HP2 28693A_HM5 28693A_FM3 28852_FM4 28693B_HM2 28693B_FP5 28693A_HP3 28693A_FP1 28693A_FM4 28852_FM5 28693B_HM3 28693B_FM1 28693A_HP4 28693A_FP2 28693A_FM5 28867_HM1 29057_FM3 29057_FP1 29057_FP5 28670_FP4
+
+do 
+
+file1R1=$(find ${loc1} -name *_${sample}*_R1_001.fastq.gz)
+file1R2=$(find ${loc1} -name *_${sample}*_R2_001.fastq.gz)
+file2R1=$(find ${loc2} -name *_${sample}*_R1_001.fastq.gz)
+file2R2=$(find ${loc2} -name *_${sample}*_R2_001.fastq.gz)
+file3R1=$(find ${loc3} -name *_${sample}*L002_R1_001.fastq.gz)
+file3R2=$(find ${loc3} -name *_${sample}*L002_R2_001.fastq.gz)
+file4R1=$(find ${loc4} -name *_${sample}*L003_R1_001.fastq.gz)
+file4R2=$(find ${loc4} -name *_${sample}*L003_R2_001.fastq.gz)
+file5R1=$(find ${loc5} -name *_${sample}*L004_R1_001.fastq.gz)
+file5R2=$(find ${loc5} -name *_${sample}*L004_R2_001.fastq.gz)
+file6R1=$(find ${loc6} -name *_${sample}*_R1_001.fastq.gz)
+file6R2=$(find ${loc6} -name *_${sample}*_R2_001.fastq.gz)
+file7R1=$(find ${loc7} -name *_${sample}*_R1_001.fastq.gz)
+file7R2=$(find ${loc7} -name *_${sample}*_R2_001.fastq.gz)
+
+echo "The following R1 files were located"
+echo ${file1R1}
+echo ${file2R1}
+echo ${file3R1}
+echo ${file4R1}
+echo ${file5R1}
+echo ${file6R1}
+echo ${file7R1}
+
+#create concatenated read files 
+cat ${file1R1} ${file2R1} ${file3R1} ${file4R1} ${file5R1} ${file6R1} ${file7R1} > /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/${sample}_R1_Merged.fastq.gz
+cat ${file1R2} ${file2R2} ${file3R2} ${file4R2} ${file5R2} ${file6R2} ${file7R2}> /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/${sample}_R2_Merged.fastq.gz
+
+echo "Removing adapters for ${sample} using NGmerge"
+
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/${sample}_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/${sample}_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads/${sample} -v -e 30 -n 50
+
+echo "Removing mitochondrial DNA for ${sample} using sortmerna"
+
+ ribodetector_cpu -t 50 \
+  -l 100 \
+  -i /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads/${sample}_1.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/Trimmed_Reads/${sample}_2.fastq.gz \
+  -e rrna \
+  --chunk_size 512 \
+  -o /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered/${sample}_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered/${sample}_2_filtered.fastq.gz \
+  -r /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Aligned/${sample}_1_aligned.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Aligned/${sample}_2_aligned.fastq.gz
+
+echo "Aligning ${sample} to hg38 using STAR"
+
+STAR \
+--runThreadN 48 \
+--quantMode TranscriptomeSAM \
+--genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/STAR_ensembl_hg38 \
+--readFilesCommand zcat \
+--readFilesIn /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered/${sample}_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/rRNA_Filtered/${sample}_2_filtered.fastq.gz \
+--outFileNamePrefix /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample} \
+--outSAMtype BAM SortedByCoordinate
+
+echo "${sample} finished!"
+
+done
+```
+
+# Run RSEM on all samples
+
+```{bash, eval = FALSE}
+
+#start for loop for each sample
+for sample in 28841_HP1 28841_HM4 28841_FM2 28867_HP5 28867_FP3 29057_HP1 29057_HM4 29057_FM2 28769_HP5 28769_FP3 28906_HP1 28906_HM4 28841_HP2 28841_HM5 28841_FM3 28867_FP4 29057_HP2 29057_HM5 28769_HM1 28769_FP4 28906_HP2 28906_HM5 28841_HP3 28841_FP1 28841_FM4 28867_HM2 28867_FP5 29057_HP3 29057_FM4 28769_HM2 28769_FP5 28906_HP3 28906_FP1 28841_HP4 28841_FP2 28841_FM5 28867_HM3 28867_FM1 29057_HP4 29057_FP2 29057_FM5 28769_HM3 28769_FM1 28906_HP4 28906_FP2 28841_HP5 28841_FP3 28867_HP1 28867_HM4 28867_FM2 29057_HP5 29057_FP3 28769_HP1 28769_HM4 28769_FM2 28906_HP5 28906_FP3 28841_HM1 28841_FP4 28867_HP2 28867_HM5 28867_FM3 29057_HM1 29057_FP4 28769_HP2 28769_HM5 28769_FM3 28906_HM1 28906_FP4 28841_HM2 28841_FP5 28867_HP3 28867_FP1 28867_FM4 29057_HM2 28769_HP3 28769_FP1 28769_FM4 28906_HM2 28906_FP5 28841_HM3 28841_FM1 28867_HP4 28867_FP2 28867_FM5 29057_HM3 29057_FM1 28769_HP4 28769_FP2 28769_FM5 28906_HM3 28906_FM1 28906_FM2 28853_HP5 28853_FP3 28743_HP1 28743_HM4 28743_FM2 28670_HP5 28670_FP3 28662_HP1 28662_HM4 28662_FM2 28852_HP5 28906_FM3 28853_HM1 28853_FP4 28743_HP2 28743_HM5 28743_FM3 28670_HM1 28662_HP2 28662_HM5 28662_FM3 28852_HM1 28906_FM4 28853_HM2 28853_FP5 28743_HP3 28743_FP1 28743_FM4 28670_HM2 28670_FP5 28662_HP3 28662_FP1 28662_FM4 28852_HM2 28906_FM5 28853_HM3 28853_FM1 28743_HP4 28743_FP2 28743_FM5 28670_HM3 28670_FM1 28662_HP4 28662_FP2 28662_FM5 28852_HM3 28853_HP1 28853_HM4 28853_FM2 28743_HP5 28743_FP3 28670_HP1 28670_HM4 28670_FM2 28662_HP5 28662_FP3 28852_HP1 28852_HM4 28853_HP2 28853_HM5 28853_FM3 28743_HM1 28743_FP4 28670_HP2 28670_HM5 28670_FM3 28662_HM1 28662_FP4 28852_HP2 28852_HM5 28853_HP3 28853_FP1 28853_FM4 28743_HM2 28743_FP5 28670_HP3 28670_FP1 28670_FM4 28662_HM2 28662_FP5 28852_HP3 28852_FP1 28853_HP4 28853_FP2 28853_FM5 28743_HM3 28743_FM1 28670_HP4 28670_FP2 28670_FM5 28662_HM3 28662_FM1 28852_HP4 28852_FP2 28852_FP3 28693B_HP1 28693B_HM4 28693B_FM2 28693A_HP5 28693A_FP3 28852_FP4 28693B_HP2 28693B_HM5 28693B_FM3 28693A_HM1 28693A_FP4 28852_FP5 28693B_HP3 28693B_FP1 28693B_FM4 28693A_HM2 28693A_FP5 28852_FM1 28693B_HP4 28693B_FP2 28693B_FM5 28693A_HM3 28693A_FM1 28852_FM2 28693B_HP5 28693B_FP3 28693A_HP1 28693A_HM4 28693A_FM2 28852_FM3 28693B_HM1 28693B_FP4 28693A_HP2 28693A_HM5 28693A_FM3 28852_FM4 28693B_HM2 28693B_FP5 28693A_HP3 28693A_FP1 28693A_FM4 28852_FM5 28693B_HM3 28693B_FM1 28693A_HP4 28693A_FP2 28693A_FM5 28867_HM1 29057_FM3 29057_FP1 29057_FP5 28670_FP4
+
+do 
+
+echo "Generating RSEM output file for ${sample}"
+
+rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Human_RNA/RSEM_Output/${sample}
+
+done
+```
+
+# Mouse RNA-seq Data Analysis
+
+Mouse sequencing read depth was calibrated to match human (~20-30 million read per sample).
+
+
+## Mouse Reference building (mm10) 
+```{bash, eval = F}
+#STAR reference for mm10 
+STAR \
+--runThreadN 8 \
+--runMode genomeGenerate \
+--genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/STAR_ensembl_GRCm39 \
+--genomeFastaFiles /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus.GRCm39.dna.primary_assembly.fa \
+--sjdbGTFfile /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus.GRCm39.107.chr.gtf \
+--sjdbOverhang 99 \
+
+#rsem reference for mm10
+rsem-prepare-reference \
+--star --star-sjdboverhang 99 --gtf /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus.GRCm39.107.chr.gtf \
+/n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus.GRCm39.dna.primary_assembly.fa \
+/n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl
+```
+
+# mouse script to process all samples
+
+```{bash, eval = F}
+loc1="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220805_A00794_0667_AHWWFKDSX3_SUB12610/fastq/PREP0229"
+loc2="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220722_M06822_0156_000000000-DH7MC/fastq/PREP0229Pool"
+loc3="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220812_A00794_0673_AHM2KVDSX3_SUB12610/fastq/human_autopod"
+
+#if needed, make directory for output concatenated reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/ exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth
+fi
+
+#if needed, make directory for adapter trimmed reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads
+fi
+
+#if needed, make directory for mitochrondria aligned reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned
+fi
+
+#if needed, make directory for after removing mitochondrial reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered
+fi
+
+#if needed, make directory for STAR output
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output
+fi
+
+
+#start for loop for each sample
+for sample in HP1A HP3A HP5A HM1A HM3A HM5A FP1A FP3A FP5A FM1A FM3A FM5A HP1D HP3D HP5D HM1D HM3D HM5D FP1D FP3D FP5D FM1D FM3D FM5D HP1F HP3F HP5F HM1F HM3F HM5F FP1F FP3F FP5F FM1F FM3F FM5F HP1G HP3G HP5G HM1G HM3G HM5G FP1G FP3G FP5G FM1G FM3G FM5G HP1H HP3H HP5H HM1H HM3H HM5H FP1H FP3H FP5H FM1H FM3H FM5H HP1I HP3I HP5I HM1I HM3I HM5I FP1I FP3I FP5I FM1I FM3I FM5I
+
+do 
+
+file1R1=$(find ${loc1} -name *_${sample}*_R1_001.fastq.gz)
+file1R2=$(find ${loc1} -name *_${sample}*_R2_001.fastq.gz)
+file2R1=$(find ${loc2} -name *_${sample}*_R1_001.fastq.gz)
+file2R2=$(find ${loc2} -name *_${sample}*_R2_001.fastq.gz)
+file3R1=$(find ${loc3} -name *_${sample}*_R1_001.fastq.gz)
+file3R2=$(find ${loc3} -name *_${sample}*_R2_001.fastq.gz)
+
+echo "The following R1 files were located"
+echo ${file1R1}
+echo ${file2R1}
+echo ${file3R1}
+
+#create concatenated read files 
+cat ${file1R1} ${file2R1} ${file3R1} > /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R1_Merged.fastq.gz
+cat ${file1R2} ${file2R2} ${file3R2} > /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R2_Merged.fastq.gz
+
+echo "Removing adapters for ${sample} using NGmerge"
+
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample} -v -e 30 -n 36
+
+echo "Removing mitochondrial DNA for ${sample} using sortmerna"
+
+ ribodetector_cpu -t 36 \
+  -l 100 \
+  -i /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_1.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_2.fastq.gz \
+  -e rrna \
+  --chunk_size 512 \
+  -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_2_filtered.fastq.gz \
+  -r /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned/${sample}_1_aligned.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned/${sample}_2_aligned.fastq.gz
+
+echo "Aligning ${sample} to mm10 using STAR"
+
+STAR \
+--runThreadN 36 \
+--quantMode TranscriptomeSAM \
+--genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/STAR_ensembl_GRCm39 \
+--readFilesCommand zcat \
+--readFilesIn /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_2_filtered.fastq.gz \
+--outFileNamePrefix /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample} \
+--outSAMtype BAM SortedByCoordinate
+
+echo "${sample} finished!"
+
+done
+```
+
+#Generate counts using RSEM
+
+```{bash, eval = FALSE}
+#start for loop for each sample
+for sample in HP1A HP3A HP5A HM1A HM3A HM5A FP1A FP3A FP5A FM1A FM3A FM5A HP1D HP3D HP5D HM1D HM3D HM5D FP1D FP3D FP5D FM1D FM3D FM5D HP1F HP3F HP5F HM1F HM3F HM5F FP1F FP3F FP5F FM1F FM3F FM5F HP1G HP3G HP5G HM1G HM3G HM5G FP1G FP3G FP5G FM1G FM3G FM5G HP1H HP3H HP5H HM1H HM3H HM5H FP1H FP3H FP5H FM1H FM3H FM5H HP1I HP3I HP5I HM1I HM3I HM5I FP1I FP3I FP5I FM1I FM3I FM5I
+
+do 
+
+echo "Generating RSEM output file for ${sample}"
+
+rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}
+
+done
+
+```
+
+#Lastly, process the two samples prepared with the human samples using the alternative RNA-prep method
+
+```{bash, eval = FALSE}
+#if needed, make directory for output concatenated reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/ exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA
+fi
+
+#if needed, make directory for adapter trimmed reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads
+fi
+
+#if needed, make directory for mitochrondria aligned reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned
+fi
+
+#if needed, make directory for after removing mitochondrial reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered
+fi
+
+#if needed, make directory for STAR output
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output
+fi
+
+#start for loop for each sample
+for sample in HP3D FP3D
+
+do 
+
+loc1="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220829_M06822_0175_000000000-DHHD2_i5revcomp/fastq/human_autopod"
+loc2="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220902_A00794_0684_BH25W7DSX5_SUB12606_dual_index/fastq/P232-233-234"
+loc3="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc4="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc5="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220913_A00794_0694_BH53HFDSX5_SUB12606_dualindex/fastq/KAPA_mRNA"
+loc6="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/220930_A00794_0710_BHNGWYDSX3_SUB13180_Dual8_corrected/fastq/PREP0232"
+loc7="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221222_A00794_0761_AHHTVMDSX5_SUB13652/fastq/P232-233-234"
+
+file1R1=$(find ${loc1} -name *mouse_${sample}*_R1_001.fastq.gz)
+file1R2=$(find ${loc1} -name *mouse_${sample}*_R2_001.fastq.gz)
+file2R1=$(find ${loc2} -name *mouse_${sample}*_R1_001.fastq.gz)
+file2R2=$(find ${loc2} -name *mouse_${sample}*_R2_001.fastq.gz)
+file3R1=$(find ${loc3} -name *mouse_${sample}*L002_R1_001.fastq.gz)
+file3R2=$(find ${loc3} -name *mouse_${sample}*L002_R2_001.fastq.gz)
+file4R1=$(find ${loc4} -name *mouse_${sample}*L003_R1_001.fastq.gz)
+file4R2=$(find ${loc4} -name *mouse_${sample}*L003_R2_001.fastq.gz)
+file5R1=$(find ${loc5} -name *mouse_${sample}*L004_R1_001.fastq.gz)
+file5R2=$(find ${loc5} -name *mouse_${sample}*L004_R2_001.fastq.gz)
+file6R1=$(find ${loc6} -name *mouse_${sample}*_R1_001.fastq.gz)
+file6R2=$(find ${loc6} -name *mouse_${sample}*_R2_001.fastq.gz)
+file7R1=$(find ${loc7} -name *mouse_${sample}*_R1_001.fastq.gz)
+file7R2=$(find ${loc7} -name *mouse_${sample}*_R2_001.fastq.gz)
+
+echo "The following R1 files were located"
+echo ${file1R1}
+echo ${file2R1}
+echo ${file3R1}
+echo ${file4R1}
+echo ${file5R1}
+echo ${file6R1}
+echo ${file7R1}
+
+#create concatenated read files 
+cat ${file1R1} ${file2R1} ${file3R1} ${file4R1} ${file5R1} ${file6R1} ${file7R1} > /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R1_Merged.fastq.gz
+cat ${file1R2} ${file2R2} ${file3R2} ${file4R2} ${file5R2} ${file6R2} ${file7R2}> /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R2_Merged.fastq.gz
+
+echo "Removing adapters for ${sample} using NGmerge"
+
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt -v -e 30 -n 36
+
+echo "Removing mitochondrial DNA for ${sample} using sortmerna"
+
+ ribodetector_cpu -t 36 \
+  -l 100 \
+  -i /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt_1.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt_2.fastq.gz \
+  -e rrna \
+  --chunk_size 512 \
+  -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_alt_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_alt_2_filtered.fastq.gz \
+  -r /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned/${sample}_alt_1_aligned.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Aligned/${sample}_alt_2_aligned.fastq.gz
+
+echo "Aligning ${sample} to mm10 using STAR"
+
+STAR \
+--runThreadN 36 \
+--quantMode TranscriptomeSAM \
+--genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/STAR_ensembl_GRCm39 \
+--readFilesCommand zcat \
+--readFilesIn /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_alt_1_filtered.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/rRNA_Filtered/${sample}_alt_2_filtered.fastq.gz \
+--outFileNamePrefix /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_alt \
+--outSAMtype BAM SortedByCoordinate
+
+echo "${sample} finished!"
+
+done
+```
+
+#generate counts using RSEM
+
+```{bash, eval = FALSE}
+#start for loop for each sample
+for sample in HP3D FP3D
+
+do 
+
+echo "Generating RSEM output file for ${sample}"
+
+rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_altAligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}_alt
+
+echo "Finished RSEM run for ${sample}"
+
+done
+```
