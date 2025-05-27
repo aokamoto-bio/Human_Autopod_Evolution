@@ -1,0 +1,387 @@
+---
+title: "Mouse Autopod RNA Analysis"
+author: "Alexander Okamoto"
+date: "2025-05-26"
+output: html_document
+---
+##set filepath
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced/')
+```
+
+##load required packages
+
+```{r, error=FALSE, warning = FALSE}
+library(tidyverse) #for basic data manipulation
+library(DESeq2) #for RNA differential expression
+library(WGCNA) #for cluster analysis
+library(grid) # for plotting
+library(cowplot) #for making combined figures
+library(magick) #for loading pictures into ggplot
+library(clusterProfiler) #for gene ontology analysis
+library(org.Mm.eg.db) #mouse gene database for GO 
+
+#load custom functions for analysis
+source("~/Desktop/Capellini_Lab/Weekly_Coding/RNA_Analysis_Functions.R") 
+```
+
+## Load in the data
+
+```{r, error = FALSE, warning = FALSE}
+#create dataframe containing sample metadata
+sampleMetaData <- data.frame(sample = c("HP1A", "HP3A", "HP5A", "HM1A", "HM3A", "HM5A", "FP1A", "FP3A", "FP5A", "FM1A", "FM3A", "FM5A", "HP1D", "HP3D", "HP5D", "HM1D", "HM3D", "HM5D", "FP1D", "FP3D", "FP5D", "FM1D", "FM3D", "FM5D", "HP1F", "HP3F", "HP5F", "HM1F", "HM3F", "HM5F", "FP1F", "FP3F", "FP5F", "FM1F", "FM3F", "FM5F", "HP1G", "HP3G", "HP5G", "HM1G", "HM3G", "HM5G", "FP1G", "FP3G", "FP5G", "FM1G", "FM3G", "FM5G", "HP1H", "HP3H", "HP5H", "HM1H", "HM3H", "HM5H", "FP1H", "FP3H", "FP5H", "FM1H", "FM3H", "FM5H", "HP1I", "HP3I", "HP5I", "HM1I", "HM3I", "HM5I", "FP1I", "FP3I", "FP5I", "FM1I", "FM3I", "FM5I", "HP3D_alt", "FP3D_alt"), 
+                             limbtype=c(rep(c(rep(c("Forelimb"), 6), rep(c("Hind_Limb"), 6)), 6), "Forelimb", "Hind_Limb"), 
+                             
+                             digit=c(rep(c("I", "III", "V"), 24), "III", "III"), 
+                             tissue = c(rep(c(rep("Phalange", 3), rep("Metapodial", 3), rep("Phalange", 3), rep("Metapodial", 3)), 6), "Phalange", "Phalange"), 
+                             tissue2 = c(rep(c(rep("FL_phalange", 3), rep("Metacarpal", 3), rep("HL_phalange", 3), rep("Metatarsal", 3)), 6), "FL_phalange", "HL_phalange"), 
+                             
+                             replicate = c(rep('A', 12), rep('D', 12), rep('F', 12), rep('G', 12), rep('H', 12), rep('I', 12), 'D', 'D'), 
+                             
+                             sampleType = c(rep(c("HP1", "HP3", "HP5", "HM1", "HM3", "HM5", "FP1", "FP3", "FP5", "FM1", "FM3", "FM5"), 6), "HP3", "FP3"), 
+                             
+                             sex = c(rep("Female", 12), rep("Male", 12), rep("Female", 12), rep("Male", 24), rep("Female", 12), "Male", "Male"), 
+                             
+                             prep  =  c(rep("SMART-Seq", 72), rep("KAPA", 2)))
+
+rownames(sampleMetaData) <- sampleMetaData$sample
+sampleMetaData$limbtype <- as.factor(sampleMetaData$limbtype)
+sampleMetaData$replicate <- as.factor(sampleMetaData$replicate)
+sampleMetaData$sex <- as.factor(sampleMetaData$sex)
+
+#remove samples prepared using alternative library prep
+#include for any analysis comparing prep method
+sampleMetaData <- sampleMetaData[-which(sampleMetaData$prep == "KAPA"),]
+
+#load the counts data
+mouse_ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced/")
+```
+
+##load in ENSEMBL mouse gene data
+
+```{r pressure, echo=FALSE}
+require(biomaRt)
+mouse_ensembl <- useMart('ensembl', dataset = 'mmusculus_gene_ensembl', host = "https://asia.ensembl.org")
+
+#make annotation data frame
+mouse_annot <- getBM(
+  attributes = c(
+    'mgi_symbol',
+    'ensembl_gene_id',
+    'gene_biotype'),
+  filters = 'ensembl_gene_id',
+  values = mouse_ct$gene_id,
+  mart = mouse_ensembl, 
+  curl = curl::new_handle(timeout_ms=3600000)
+)
+
+#merge annotations to counts data
+mouse_annot_df <- merge(
+  x = as.data.frame(mouse_ct),
+  y =  mouse_annot,
+  by.y = 'ensembl_gene_id',
+  all.x = T,
+  by.x = 'gene_id')
+
+#cleanup
+rm(mouse_ensembl)
+```
+
+## identify DEGs by performing all biologically relevent pair-wise comparisons
+
+```{r}
+sampleTypes <- unique(sampleMetaData$sampleType)
+
+sample_unique_info <- data.frame(sample = sampleTypes, comparisons1 = NA, comparisons2= NA, file_name = paste("~/Desktop/Capellini Lab/Mouse Autopod RNA/mouse_", sampleTypes, "_Genes.tsv", sep = ""))
+
+#create sample and control sets
+for (samp in sampleTypes){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 3
+  }
+  #check if digit 3
+  if (samp_info[3] == "3"){
+    comp_digits <- c(1, 5)
+  }
+  #check if digit 1
+  if (samp_info[3] == "5"){
+    comp_digits <- c(3)
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if phalanges
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+    digit_comp <- paste(samp_info[1], alt_region, samp_info[3], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], sep = "")
+  sample_unique_info$comparisons1[which(sample_unique_info$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp)))
+  sample_unique_info$comparisons2[which(sample_unique_info$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, sep = "|")
+}
+```
+
+## Use function to perform DESeq and return number of genes
+
+```{r}
+#add key to convert between my nomenclature and something less easy to misinterpret
+autopod_key <- data.frame(autopod_abrevs = c("FM1", "FM2", "FM3", "FM4", "FM5", 
+                     "FP1", "FP2", "FP3", "FP4", "FP5", 
+                     "HM1", "HM2", "HM3", "HM4", "HM5", 
+                     "HP1", "HP2", "HP3", "HP4", "HP5"), autopod_tissues = c("METATARSAL1", "METATARSAL2", "METATARSAL3", "METATARSAL4", "METATARSAL5", 
+                                    "FOOTPHALANGES1", "FOOTPHALANGES2", "FOOTPHALANGES3", "FOOTPHALANGES4", "FOOTPHALANGES5", 
+                                    "METACARPAL1", "METACARPAL2", "METACARPAL3", "METACARPAL4", "METACARPAL5", 
+                                    "HANDPHALANGES1", "HANDPHALANGES2", "HANDPHALANGES3", "HANDPHALANGES4", "HANDPHALANGES5"))
+ 
+#create dataframe to store results
+mouse_DEGs <- data.frame()
+ 
+#iterate over each sample
+for (i in 1:length(sampleTypes)){
+   #find number of comparisons
+   comp_samples <- unlist(sample_unique_info$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, grep(paste(sample_unique_info$sample[i], comp_samples[c], sep = "|"), names(mouse_ct)))
+     good_data <- mouse_ct[,colsToKeep]
+     filteredMetaData <- sampleMetaData %>% dplyr::filter(sampleType %in% c(sample_unique_info$sample[i], comp_samples[c]))
+     filteredMetaData$sampleType <- factor(filteredMetaData$sampleType, levels = c(sample_unique_info$sample[i], comp_samples[c]))
+     test_output <- runDESEQ2_df(design_in = formula(~replicate + sampleType), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     #fix column names
+     names(test_output)[1] <- "ensembl_gene_id"
+     names(test_output)[8] <- "mgi_symbol"
+     test_output$tissue1 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])]
+     test_output$tissue2 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])]
+     mouse_DEGs <- rbind(mouse_DEGs, test_output)
+   }
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(mouse_DEGs) %>% dplyr::filter(abs(log2FoldChange) > 0.58 ), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", delim = "\t")
+```
+
+#load in the saved DEG data
+
+```{r}
+#DEGs per comparison
+mouse_DEGs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", sep = "\t", header = T))
+
+#now identify gradient genes
+dds <- DESeqDataSetFromMatrix(countData = mouse_ct, colData = sampleMetaData, design = ~replicate + digit, tidy = T)
+dds <- DESeq(dds, test="LRT", reduced=~replicate)
+dds_res <- results(dds, alpha = 0.05)
+dds_res_df <- merge(x= as.data.frame(dds_res), by.x ='row.names',  y = mouse_annot,
+  by.y = 'ensembl_gene_id', no.dups = TRUE) %>% dplyr::filter(padj < 0.05)
+
+#reform to add to human DEG object
+colnames(dds_res_df)[1] <- "ensembl_gene_id"
+dds_res_df$tissue1 <- "GRADIENT"
+dds_res_df$tissue2 <- "GRADIENT"
+dds_res_df$gene_biotype <- NULL
+
+mouse_DEGs2 <- rbind(mouse_DEGs, dds_res_df) %>% dplyr::filter(padj < 0.01, abs(log2FoldChange) > 0.58 )
+
+#get total number of unique DEGs
+length(unique(mouse_DEGs2$mgi_symbol))
+
+#see distribution of DEGs between pairwise comparisons
+table(paste(mouse_DEGs2$tissue1, mouse_DEGs2$tissue2, sep = "_")) %>% sort()
+
+#save results
+write_delim(x = mouse_DEGs2, file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", delim = "\t")
+```
+
+## Module Analysis Using WGNCA
+I followed this tutoriaL: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
+```{r}
+#perform initial DESeq to get normalized counts
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#reduced <- formula(~limbtype)
+
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = mouse_ct, colData = sampleMetaData, design = design, tidy = T)
+rsem_annot <- as.data.frame(row.names(rsem.in))
+colnames(rsem_annot) <- 'ensembl_gene_id'
+rsem_annot <- merge(x= rsem_annot, y =  mouse_annot,
+  by= 'ensembl_gene_id', no.dups = TRUE, all.x=TRUE) %>% setorder(cols = "ensembl_gene_id")   
+#remove duplicate rows
+rsem_annot <- rsem_annot[!duplicated(rsem_annot$ensembl_gene_id),]
+mcols(rsem.in) <- cbind(mcols(rsem.in), rsem_annot$mgi_symbol)
+
+rsem.de <- DESeq(rsem.in)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+rsem.vst <- vst(rsem.de)
+mat <- assay(rsem.vst)
+mm <- model.matrix(~replicate, colData(rsem.vst))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst)$replicate)
+assay(rsem.vst) <- mat
+normalized_counts <- assay(rsem.vst)
+
+#filter by DEGs
+mouse_DEGs_list <- unique(mouse_DEGs2$ensembl_gene_id)
+DEG_normalized_counts <- normalized_counts[which(row.names(normalized_counts) %in% mouse_DEGs_list),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+allowWGCNAThreads()
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df <- data.frame(
+  gene_id = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+```
+
+## Plot output
+
+```{r}
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df %>% 
+  group_by(cluster) %>% 
+  summarize(gene_n = n()) 
+
+write_delim(module_df %>% left_join(color_cluster_key) %>% 
+  left_join(mouse_annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, mgi_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster) ,
+            file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_gene_clusters.tsv",
+            delim = "\t")
+            
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>%
+    left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("mouse_RNA_cluster_", i, sep = ""), opt_text = paste("n=", mME_temp$gene_n[1], sep =""), center = T, center_color_value = 0)
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_2.png") %>%
+  image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_4.png") %>%
+  image_ggplot()
+plt5 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_5.png") %>%
+  image_ggplot()
+plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_6.png") %>%
+  image_ggplot()
+plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_7.png") %>%
+  image_ggplot()
+
+#generate and save plot
+mouse_RNA_clusters_wgcna <- plot_grid(plt0, plt1, plt2, plt3, plt4, plt5, plt6, plt7 , nrow =3, ncol = 4, labels = 0:12, align="hv")
+ggsave(mouse_RNA_clusters_wgcna, device = "png", filename = "mouse_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10)
+```
+
+#perform gene ontology (GO) enrichment
+```{r}
+#run gene ontology analysis
+cluster_go_analysis(cluster_results = module_df, 
+                    universe = mouse_ct$gene_id, 
+                    database = org.Mm.eg.db, 
+                    outfile = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse_RNA_Clusters_Go_Enrichments.csv")
+
+#read in enrichments 
+mouse_GO_clusters <- unique(read.delim(file= "~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse_RNA_Clusters_Go_Enrichments.csv", sep = "\t", header = T))
+```
