@@ -201,7 +201,7 @@ dds_res_df$tissue1 <- "GRADIENT"
 dds_res_df$tissue2 <- "GRADIENT"
 dds_res_df$gene_biotype <- NULL
 
-mouse_DEGs2 <- rbind(mouse_DEGs, dds_res_df) %>% dplyr::filter(padj < 0.01, abs(log2FoldChange) > 0.58 )
+mouse_DEGs2 <- rbind(mouse_DEGs, dds_res_df) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58 )
 
 #get total number of unique DEGs
 length(unique(mouse_DEGs2$mgi_symbol))
