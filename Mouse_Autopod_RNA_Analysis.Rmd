@@ -323,6 +323,25 @@ module_df <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment = sampleMetaData$sampleType
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
 ```
 
 ## Plot output
