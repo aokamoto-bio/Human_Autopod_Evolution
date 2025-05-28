@@ -110,7 +110,7 @@ for (samp in sampleTypes){
   if (samp_info[3] == "3"){
     comp_digits <- c(1, 5)
   }
-  #check if digit 1
+  #check if digit 5
   if (samp_info[3] == "5"){
     comp_digits <- c(3)
   }
