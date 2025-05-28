@@ -368,10 +368,21 @@ plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_6.png")
   image_ggplot()
 plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_7.png") %>%
   image_ggplot()
+plt8 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_8.png") %>%
+  image_ggplot()
+plt9 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_9.png") %>%
+  image_ggplot()
+plt10 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_10.png") %>%
+  image_ggplot()
+plt11 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_11.png") %>%
+  image_ggplot()
+plt12 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_12.png") %>%
+  image_ggplot()
 
 #generate and save plot
-mouse_RNA_clusters_wgcna <- plot_grid(plt0, plt1, plt2, plt3, plt4, plt5, plt6, plt7 , nrow =3, ncol = 4, labels = 0:12, align="hv")
+mouse_RNA_clusters_wgcna <- plot_grid(plt0, plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, nrow =3, ncol = 5, labels = 0:12, align="hv")
 ggsave(mouse_RNA_clusters_wgcna, device = "png", filename = "mouse_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10)
+
 ```
 
 #perform gene ontology (GO) enrichment
