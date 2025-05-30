@@ -1,0 +1,1161 @@
+---
+title: "Human Autopod RNA Analysis"
+author: "Alexander Okamoto"
+date: "2025-05-27"
+output: html_document
+---
+
+##Set working directory
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini Lab/Human Autopod RNA/Human RSEM Output')
+```
+
+##load required packages
+
+```{r, error=FALSE, warning = FALSE}
+library(tidyverse) #for basic data manipulation
+library(DESeq2) #for RNA differential expression
+library(limma) #for batch effect correction
+library(data.table) #for data manipulation
+library(WGCNA) #for cluster analysis
+library(grid) # for plotting
+library(data.table) #for data manipulation
+library(ggpubr) #for making combined figures
+library(cowplot) #for making combined figures
+library(magick) #for loading pictures into ggplot
+
+library(stringr) # for manipulating strings
+library(clusterProfiler) #for gene enrichment
+library(org.Hs.eg.db) #for gene enrichment
+library(org.Mm.eg.db) #for gene enrichment
+
+
+#load custom functions for analysis
+source("~/Desktop/Capellini_Lab/Weekly_Coding/RNA_Analysis_Functions.R") 
+```
+
+## Load in the data
+
+```{r}
+
+#Determine the file names
+sampleNames <- read.table(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output/human_autopod_RNA_samples.txt", header = F)
+#sort sample names alphabetically 
+sampleNames <- sort(sampleNames$V1)
+
+#create dataframe including metadata information
+sampleMetaData <- data.frame(sample = sampleNames, limbtype=c(rep(c("Hind_limb"), 10), rep(c("Forelimb"), 10)), digit=c("I", "II", "III", "IV", "V"), tissue = c(rep("Metapodial", 5), rep("Phalange", 5), rep("Metapodial", 5), rep("Phalange", 5)), tissue2 = c(rep("Metatarsal", 5), rep("Hind_phalange", 5), rep("Metacarpal", 5), rep("Fore_phalange", 5)), replicate = c(rep('H28662', 20), rep('H28670', 20), rep('H28693A', 20), rep('H28693B', 20), rep('H28743', 20), rep('H28769', 20), rep('H28841', 20), rep('H28852', 20), rep('H28853', 20), rep('H28867', 20), rep('H28906', 20), rep('H29057', 20)), sampleType = c("FM1", "FM2", "FM3", "FM4", "FM5", "FP1", "FP2", "FP3", "FP4", "FP5", "HM1", "HM2", "HM3", "HM4", "HM5", "HP1", "HP2", "HP3", "HP4", "HP5"), sex = c(rep("Male", 100), rep("Female", 20), rep("Male", 40), rep("Female", 20), rep("Male", 60)), timepoint = c(rep('Late', 100), rep('Early', 40), rep('Late', 20), rep('Early', 80)), stage = c(rep('72', 20), rep('67', 20), rep('74', 20), rep('72', 20), rep('67', 20), rep('57', 20), rep('53', 20), rep('72', 20), rep('59', 20), rep('54', 20), rep('57', 20), rep('54', 20)))
+
+#remove problematic samples
+sampleMetaData <- sampleMetaData %>% dplyr::filter(!sample %in% c("28867_HM1", "29057_FM3"))
+
+rownames(sampleMetaData) <- sampleMetaData$sample
+
+#change variables to factors
+sampleMetaData$limbtype <- as.factor(sampleMetaData$limbtype)
+sampleMetaData$replicate <- as.factor(sampleMetaData$replicate)
+sampleMetaData$sex <- as.factor(sampleMetaData$sex)
+sampleMetaData$timepoint <- as.factor(sampleMetaData$timepoint)
+sampleMetaData$stage <- as.factor(sampleMetaData$stage)
+sampleMetaData$sample_tp <- paste(sampleMetaData$sampleType, "_", sampleMetaData$timepoint, sep = "")
+
+#get load read count information to check for technical artifacts in the data
+human_rna_read_counts <- read.delim(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_rna_read_counts.txt", header = T)
+#rename columns for clarity/merging
+colnames(human_rna_read_counts) <- c("sample", "reads")
+
+#add read count information to metadata dataframe
+sampleMetaData <- sampleMetaData %>% dplyr::left_join(human_rna_read_counts, by = 'sample')
+
+#load the counts data
+ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output/")
+
+#remove version number from gene_id so it will be compatible with biomart
+ct$gene_id = sapply(strsplit(ct$gene_id, ".", fixed=T), function(x) x[1])
+
+#will sum the counts for matches to the same gene
+ct <- aggregate(. ~ gene_id, data= ct, FUN=sum)
+
+#change row names to unique values
+rownames(ct) <- ct$gene_id
+names(ct)[1] <- "ensembl_gene_id"
+
+#remove samples with low read counts
+ct$`28867_HM1` <- NULL
+ct$`29057_FM3` <- NULL
+```
+
+##RSEM output human ensembl ids with the version number (with .X) and biomart/DEGseq would prefer they be normal integers. The problem is some of these values are non-unique so need to figure out what to do with these. There are only 33 duplicated genes so these will be aggregrated. 
+
+##load in ENSEMBL human gene data
+
+```{r pressure, echo=FALSE}
+require(biomaRt)
+hs_ensembl <- useMart('ensembl', dataset = 'hsapiens_gene_ensembl', host = "https://asia.ensembl.org")
+
+#make annotation data frame
+annot <- getBM(
+  attributes = c(
+    'hgnc_symbol',
+    'ensembl_gene_id',
+    'gene_biotype'),
+  filters = 'ensembl_gene_id',
+  values = ct$ensembl_gene_id,
+  mart = hs_ensembl)
+
+#merge annotations to counts data
+annot_df <- merge(
+  x = as.data.frame(ct),
+  y =  annot,
+  by = 'ensembl_gene_id',
+  all.x = T)
+
+#cleanup
+rm(hs_ensembl)
+```
+
+## Determine pair-wise comparisons
+
+```{r}
+## now determine the specific pairwise comparisons to perform (i.e. the most biologically meaningful DESeq runs)
+#I am using a schema to minimize confounders by only changing a single variable (either tissue location, either anteriorly/posteriorly or proximally/distally, across limb type, or across timepoint).
+
+#list sample types
+sampleTypes <- c(paste(unique(sampleMetaData$sampleType), "E", sep = ""), paste(unique(sampleMetaData$sampleType), "L", sep = ""))
+
+#create dataframe to store results
+sample_unique_info <- data.frame(sample = sampleTypes, comparisons1 = NA, comparisons2= NA)
+
+#create sample and control sets
+for (samp in sampleTypes){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 2
+  }
+  #check if digit 3
+  if (samp_info[3] > 1 && samp_info[3] < 5){
+    comp_digits <- c(as.numeric(samp_info[3]) - 1,as.numeric(samp_info[3]) + 1)
+  }
+  #check if digit 1
+  if (samp_info[3] == "5"){
+    comp_digits <- 4
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if food (hind limb)
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+  #check if early stage
+  if (samp_info[4] == "E"){
+    alt_stage <- "L"
+  }
+  #check if late stage
+  if (samp_info[4] == "L"){
+    alt_stage <- "E"
+  }
+    digit_comp <- paste(samp_info[1], alt_region, samp_info[3], samp_info[4], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], samp_info[4], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], samp_info[4], sep = "")
+  stage_comp <- paste(samp_info[1], samp_info[2], samp_info[3], alt_stage, sep = "")
+  sample_unique_info$comparisons1[which(sample_unique_info$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp, stage_comp)))
+  sample_unique_info$comparisons2[which(sample_unique_info$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, stage_comp, sep = "|")
+}
+```
+
+## Create a function to perform DESeq and return number of genes
+
+```{r}
+#initialize function
+  #design_in is the DESeq model input
+
+runDESEQ2_df_hs <- function(design_in, count_data, col_data, padj.cutoff = 0.05){
+
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+  
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = count_data, colData = col_data, design = design_in, tidy = T)
+#pre-filter rows with 0 or 1 read
+rsem.in <- rsem.in[ rowSums(counts(rsem.in)) >= 1, ]
+rsem_cols <-as.data.frame(row.names(rsem.in))
+colnames(rsem_cols) <- 'ensembl_gene_id'
+rsem_annot <- merge(x= rsem_cols, y =  annot,
+  by= 'ensembl_gene_id', no.dups = TRUE, all.x=TRUE) %>% setorder(cols = "ensembl_gene_id")  
+#remove duplicate rows
+rsem_annot <- rsem_annot[!duplicated(rsem_annot$ensembl_gene_id),]
+mcols(rsem.in) <- cbind(mcols(rsem.in), rsem_annot$hgnc_symbol)
+rsem.de <- DESeq(rsem.in)
+
+#rsem.in variable is building the dataset 
+#now model is in rsem.de
+
+#summarized experiment input
+#can set alpha level at whatever
+rsem.de.res <- results(rsem.de, alpha = 0.05)
+#
+rsem.de.res$mgi_symbol <- mcols(rsem.in)['rsem_annot$hgnc_symbol']
+
+#summary shows summary of results
+summary(rsem.de.res)
+
+#This is a way to export a table of the differentially expressed genes, ordered by p-value
+rsem.de.res.df <- rsem.de.res[order(rsem.de.res$padj),] %>% as.data.frame() %>% dplyr::filter(padj < padj.cutoff)
+
+return(rsem.de.res.df)
+} #end function
+
+#add key to convert between my nomenclature and something less easy to misinterpret
+autopod_key_notp <- data.frame(autopod_abrevs = c("FM1", "FM2", "FM3", "FM4", "FM5", 
+                    "FP1", "FP2", "FP3", "FP4", "FP5", 
+                    "HM1", "HM2", "HM3", "HM4", "HM5", 
+                    "HP1", "HP2", "HP3", "HP4", "HP5"), autopod_tissues = c("METATARSAL1", "METATARSAL2", "METATARSAL3", "METATARSAL4", "METATARSAL5", 
+                                   "FOOTPHALANGES1", "FOOTPHALANGES2", "FOOTPHALANGES3", "FOOTPHALANGES4", "FOOTPHALANGES5", 
+                                   "METACARPAL1", "METACARPAL2", "METACARPAL3", "METACARPAL4", "METACARPAL5", 
+                                   "HANDPHALANGES1", "HANDPHALANGES2", "HANDPHALANGES3", "HANDPHALANGES4", "HANDPHALANGES5"))
+autopod_key_early <- autopod_key_notp 
+autopod_key_late <- autopod_key_notp 
+autopod_key_early$autopod_abrevs <- paste(autopod_key_early$autopod_abrevs, "E", sep = "")
+autopod_key_late$autopod_abrevs <- paste(autopod_key_late$autopod_abrevs, "L", sep = "")
+autopod_key_early$autopod_tissues <- paste(autopod_key_early$autopod_tissues, "E", sep = "")
+autopod_key_late$autopod_tissues <- paste(autopod_key_late$autopod_tissues, "L", sep = "")
+  
+autopod_key <- rbind(autopod_key_early, autopod_key_late)
+  
+
+#modify ct column names to be compatible
+names(ct)[which(names(ct) %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Late")])] <- paste(names(ct)[which(names(ct) %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Late")])], "L", sep = "")
+names(ct)[which(names(ct) %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Early")])] <- paste(names(ct)[which(names(ct) %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Early")])], "E", sep = "")
+
+#add column to sample metadata
+sampleMetaData$sampleTypeTP <- NA
+sampleMetaData$sampleTypeTP[which(sampleMetaData$timepoint == "Late")] <- paste(sampleMetaData$sampleType[which(sampleMetaData$timepoint == "Late")], "L", sep = "")
+sampleMetaData$sampleTypeTP[which(sampleMetaData$timepoint == "Early")] <- paste(sampleMetaData$sampleType[which(sampleMetaData$timepoint == "Early")], "E", sep = "")
+sampleMetaData$sampleTypeTP<- factor(sampleMetaData$sampleTypeTP)
+rownames(sampleMetaData)[which(sampleMetaData$timepoint == "Late")] <- paste(sampleMetaData$sample[which(sampleMetaData$timepoint == "Late")], "L", sep = "")
+rownames(sampleMetaData)[which(sampleMetaData$timepoint == "Early")] <- paste(sampleMetaData$sample[which(sampleMetaData$timepoint == "Early")], "E", sep = "")
+
+#add rownames to sampleMetaData
+row.names(sampleMetaData) <- names(ct[-1])
+# #create dataframe to store results
+ human_DEGs <- data.frame()
+#
+ #iterate over each sample
+ for (i in 1:length(sampleTypes)){
+   #find number of
+   comp_samples <- unlist(sample_unique_info$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, pattern = grep(paste(sample_unique_info$sample[i], comp_samples[c], sep = "|"), names(ct)))
+     good_data <- ct[,colsToKeep]
+     filteredMetaData <- sampleMetaData %>% dplyr::filter(sampleTypeTP %in% c(sample_unique_info$sample[i], comp_samples[c]))
+filteredMetaData$sampleTypeTP <- factor(filteredMetaData$sampleTypeTP, levels = c(sample_unique_info$sample[i], comp_samples[c]))
+     #check if same all same timepoint
+     if(length(names(good_data[-1])) ==  length(grep(x = names(good_data[-1]), pattern = "L"))){
+     test_output <- runDESEQ2_df_hs(design_in = formula(~replicate + sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     }else{
+       test_output <- runDESEQ2_df_hs(design_in = formula(~sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     }
+     #fix column names
+     names(test_output)[1] <- "ensembl_gene_id"
+     names(test_output)[8] <- "hgnc_symbol"
+     test_output$tissue1 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])]
+     test_output$tissue2 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])]
+     if(nrow(test_output) > 0){
+     human_DEGs <- rbind(human_DEGs, test_output)
+     }
+     #note if no DEGs identified
+     if(nrow(test_output) == 0){
+     test_output <- data.frame(ensembl_gene_id = NA,  baseMean = NA, log2FoldChange = NA, lfcSE = NA, stat = NA, pvalue= NA, padj = NA, hgnc_symbol= "NO_DEGs_FOUND", tissue1=autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])], tissue2= autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])])
+     human_DEGs <- rbind(human_DEGs, test_output)
+     }
+   }
+ }
+
+ write_delim(x = as.data.frame(human_DEGs), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs.tsv", delim = "\t")
+```
+
+## Gradient genes
+
+```{r}
+#subset the count data
+colnames_clean <- gsub(pattern = "E", replacement = "", colnames(ct))
+colnames_clean <- gsub(pattern = "L", replacement = "", colnames_clean)
+
+#early
+ct_early <- ct[, c(1, which(colnames_clean %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Early")]))] %>% as.data.frame()
+#pre-filter rows with 0 or 1 read
+ct_early <- ct_early[rowSums(ct_early[,-1]) > 1,]
+
+#late
+ct_late <- ct[,c(1, which(colnames_clean %in% sampleMetaData$sample[which(sampleMetaData$timepoint == "Late")]))]
+#pre-filter rows with 0 or 1 read
+ct_late <- ct_late[rowSums(ct_late[-1]) > 1,]
+
+#now identify gradient genes
+dds <- DESeqDataSetFromMatrix(countData = ct_early, colData = sampleMetaData %>% dplyr::filter(timepoint == "Early"), design = ~replicate + digit, tidy = T)
+dds <- DESeq(dds, test="LRT", reduced=~replicate)
+dds_res <- results(dds, alpha = 0.05)
+dds_res_df_early <- merge(x= as.data.frame(dds_res), by.x ='row.names',  y =  annot,
+  by.y = 'ensembl_gene_id', no.dups = TRUE) %>% dplyr::filter(padj < 0.05)
+
+#reform to add to human DEG object
+colnames(dds_res_df_early)[1] <- "ensembl_gene_id"
+dds_res_df_early$tissue1 <- "EARLY_GRADIENT"
+dds_res_df_early$tissue2 <- "EARLY_GRADIENT"
+dds_res_df_early$gene_biotype <- NULL
+
+human_DEGs2 <- rbind(human_DEGs, dds_res_df_early)
+
+#now identify gradient genes
+dds <- DESeqDataSetFromMatrix(countData = ct_late, colData = sampleMetaData %>% dplyr::filter(timepoint == "Late"), design = ~replicate + digit, tidy = T)
+dds <- DESeq(dds, test="LRT", reduced=~replicate)
+dds_res <- results(dds, alpha = 0.05)
+dds_res_df_late <- merge(x= as.data.frame(dds_res), by.x ='row.names',  y =  annot,
+  by.y = 'ensembl_gene_id', no.dups = TRUE) %>% dplyr::filter(padj < 0.05)
+
+#reform to add to human DEG object
+colnames(dds_res_df_late)[1] <- "ensembl_gene_id"
+dds_res_df_late$tissue1 <- "LATE_GRADIENT"
+dds_res_df_late$tissue2 <- "LATE_GRADIENT"
+dds_res_df_late$gene_biotype <- NULL
+
+#get final set of human DEGs
+human_DEGs2 <- rbind(human_DEGs2, dds_res_df_late) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58)
+
+  write_delim(x = as.data.frame(human_DEGs2), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs2.tsv", delim = "\t")
+```
+
+## Get timepoint lists of DEGs
+
+```{r}
+#get timepoint information for each DEG comparison
+human_DEGs2$tissue1_tp <- str_sub(human_DEGs2$tissue1, start= -1)
+human_DEGs2$tissue2_tp <- str_sub(human_DEGs2$tissue2, start= -1)
+#fix gradient gene calls
+human_DEGs2$tissue1_tp[which(human_DEGs2$tissue1 == "EARLY_GRADIENT")] <- "E"
+human_DEGs2$tissue2_tp[which(human_DEGs2$tissue2 == "EARLY_GRADIENT")] <- "E"
+human_DEGs2$tissue1_tp[which(human_DEGs2$tissue1 == "LATE_GRADIENT")] <- "L"
+human_DEGs2$tissue2_tp[which(human_DEGs2$tissue2 == "LATE_GRADIENT")] <- "L"
+
+#subset the DEGs
+human_DEGs_early <- human_DEGs2 %>% dplyr::filter(tissue1_tp == "E" & tissue2_tp == "E")
+human_DEGs_late <- human_DEGs2 %>% dplyr::filter(tissue1_tp == "L" & tissue2_tp == "L")
+
+#get counts
+length(unique(human_DEGs_early$ensembl_gene_id))
+length(unique(human_DEGs_late$ensembl_gene_id))
+length(intersect(human_DEGs_early$ensembl_gene_id, human_DEGs_late$ensembl_gene_id))
+```
+
+## Module Analysis Using WGNCA
+I used this tutoriaL: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
+
+#rerun a DEGseq to get vst transformed data
+#forelimb vs hind limb
+#early
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = ct_early, colData = sampleMetaData %>% dplyr::filter(timepoint == "Early"), design = design, tidy = T)
+
+rsem_cols <-as.data.frame(row.names(rsem.in))
+rsem_cols$ensembl <- sapply(strsplit(rsem_cols$`row.names(rsem.in)`, ".", fixed=T), function(x) x[1])
+
+colnames(rsem_cols) <- c('ensembl_gene_id', 'ensembl')
+rsem_annot <- merge(x= rsem_cols, y =  annot, by.x ='ensembl',
+  by.y = 'ensembl_gene_id', no.dups = FALSE, all.x = TRUE, all.y=FALSE)
+
+#combine gene symbols for duplicated rows
+for (dup in rsem_annot$ensembl_gene_id[which(duplicated(rsem_annot$ensembl_gene_id))]){
+  dup_ids <- which(rsem_annot$ensembl_gene_id == dup)
+  dup_cat_id <- paste(rsem_annot$ensembl_gene_id[1], ", ", rsem_annot$ensembl_gene_id[2], sep ="")
+  rsem_annot$hgnc_symbol[dup_ids[2]]<- dup_cat_id
+}
+rsem_annot_2 <- rsem_annot[-which(duplicated(rsem_annot$ensembl_gene_id)), ] %>% setorder(cols = "ensembl_gene_id")   
+mcols(rsem.in) <- cbind(mcols(rsem.in), rsem_annot_2$hgnc_symbol)
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+mcols(rsem.de) <- cbind(mcols(rsem.de), rsem_annot_2)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+
+#plots related to dispersion, built in function to DESEQ
+rsem.vst_early <- vst(rsem.de)
+mat <- assay(rsem.vst_early)
+mm <- model.matrix(~replicate, colData(rsem.vst_early))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst_early)$replicate)
+assay(rsem.vst_early) <- mat
+
+normalized_counts_early <- assay(rsem.vst_early)
+
+#filter by DEGs
+human_DEGs_early_list <- unique(human_DEGs_early$ensembl_gene_id)
+DEG_normalized_counts_early <- normalized_counts_early[which(row.names(normalized_counts_early) %in% human_DEGs_early_list),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts_early)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df_early <- data.frame(
+  gene_id = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment <- sampleMetaData %>% dplyr::filter(timepoint == "Early") %>% pull(sampleType)
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df_early %>% 
+  group_by(cluster) %>% 
+  summarize(gene_n = n()) 
+
+write_delim(module_df_early %>% left_join(color_cluster_key) %>% 
+  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster),
+            file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_early_gene_modules.tsv",
+            delim = "\t")
+
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>% 
+    left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("human_early_RNA_cluster_", i, sep = ""), opt_text = paste(mME_temp$gene_n[i+1], " genes", sep =""),
+                       center =T 
+                        )
+  
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_2.png") %>%
+  image_ggplot()
+
+#generate and save plot
+human_RNA_clusters_wgcna <- plot_grid(plt1, plt2,  nrow =1, ncol = 2, labels = 1:2, align="hv")
+ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_early_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
+```
+
+#late
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = ct_late, colData = sampleMetaData %>% dplyr::filter(timepoint == "Late"), design = design, tidy = T)
+
+rsem_cols <-as.data.frame(row.names(rsem.in))
+rsem_cols$ensembl <- sapply(strsplit(rsem_cols$`row.names(rsem.in)`, ".", fixed=T), function(x) x[1])
+
+colnames(rsem_cols) <- c('ensembl_gene_id', 'ensembl')
+rsem_annot <- merge(x= rsem_cols, y =  annot, by.x ='ensembl',
+  by.y = 'ensembl_gene_id', no.dups = FALSE, all.x = TRUE, all.y=FALSE)
+
+#combine gene symbols for duplicated rows
+for (dup in rsem_annot$ensembl_gene_id[which(duplicated(rsem_annot$ensembl_gene_id))]){
+  dup_ids <- which(rsem_annot$ensembl_gene_id == dup)
+  dup_cat_id <- paste(rsem_annot$ensembl_gene_id[1], ", ", rsem_annot$ensembl_gene_id[2], sep ="")
+  rsem_annot$hgnc_symbol[dup_ids[2]]<- dup_cat_id
+}
+rsem_annot_2 <- rsem_annot[-which(duplicated(rsem_annot$ensembl_gene_id)), ] %>% setorder(cols = "ensembl_gene_id")   
+mcols(rsem.in) <- cbind(mcols(rsem.in), rsem_annot_2$hgnc_symbol)
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+mcols(rsem.de) <- cbind(mcols(rsem.de), rsem_annot_2)
+
+#plots related to dispersion, built in function to DESEQ
+rsem.vst_late <- vst(rsem.de)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+mat <- assay(rsem.vst_late)
+mm <- model.matrix(~replicate, colData(rsem.vst_late))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst_late)$replicate)
+assay(rsem.vst_late) <- mat
+normalized_counts_late <- assay(rsem.vst_late)
+
+#filter by DEGs
+human_DEGs_late_list <- unique(human_DEGs_late$ensembl_gene_id)
+DEG_normalized_counts_late <- normalized_counts_late[which(row.names(normalized_counts_late) %in% human_DEGs_late$ensembl_gene_id),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts_late)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df_late <- data.frame(
+  gene_id = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment <- sampleMetaData %>% dplyr::filter(timepoint == "Late") %>% pull(sampleType)
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+  
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df_late %>% 
+  group_by(cluster) %>% 
+  summarize(gene_n = n()) 
+
+write_delim(module_df_late %>% left_join(color_cluster_key) %>% 
+  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster),
+            file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_late_gene_modules.tsv",
+            delim = "\t")
+
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>% 
+    left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("human_late_RNA_cluster_", i, sep = ""), opt_text = paste(mME_temp$gene_n[i+1], " genes", sep =""),
+                        center =T
+                        )
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_2.png") %>%
+  image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_4.png") %>%
+  image_ggplot()
+
+#generate and save plot
+human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4,  nrow =2, ncol = 3, labels = 1:4, align="hv")
+ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_late_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
+```
+
+# GO Enrichments
+
+```{r}
+# note the DESeq2 cannot handle perfectly correlated variables like individual and sex since one contains a full set of the other
+# due to this, I only control for individual (replicate)
+design <- formula(~replicate + tissue)
+
+#build DESeqDataSet
+human_rsem.in <- DESeqDataSetFromMatrix(countData = ct, colData = sampleMetaData, design = design, tidy = T)
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+human_rsem.de <- DESeq(human_rsem.in)
+
+#run combined analysis to use GO enrichment code
+# Retrieve the normalized data from the `DESeqDataSet`
+# do not correct for replicate when comparing timepoints, this removes timepoint effects
+# run the PCA DESeq to generate the human_rsem.de object
+human_rsem.vst <- vst(human_rsem.de)
+normalized_counts <- assay(human_rsem.vst)
+
+#filter by DEGs
+human_DEGs_list <- unique(human_DEGs2$ensembl_gene_id)
+DEG_normalized_counts <- normalized_counts[which(row.names(normalized_counts) %in% human_DEGs_list),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+#choose power as minimum value to produce Rsq greater than 0.9
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df <- data.frame(
+  gene_id = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+#run gene ontology analysis
+cluster_go_analysis(cluster_results = module_df, 
+                    universe = ct$ensembl_gene_id, 
+                    database = org.Hs.eg.db, 
+                    outfile = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Go_Enrichments.csv")
+
+#read in enrichments 
+human_GO_clusters <- unique(read.delim(file= "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Go_Enrichments.csv", sep = ",", header = T))
+
+#run eary stage gene ontology analysis
+cluster_go_analysis(cluster_results = module_df_early, 
+                    universe = ct$ensembl_gene_id, 
+                    database = org.Hs.eg.db, 
+                    outfile = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Early_GO_Enrichments.csv")
+
+#read in enrichments 
+human_GO_clusters_early <- unique(read.delim(file= "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Early_GO_Enrichments.csv", sep = "\t", header = T))
+
+#run late stage gene ontology analysis
+cluster_go_analysis(cluster_results = module_df_late, 
+                    universe = ct$ensembl_gene_id, 
+                    database = org.Hs.eg.db, 
+                    outfile = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Late_GO_Enrichments.csv")
+
+#read in enrichments 
+human_GO_clusters_late <- unique(read.delim(file= "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Late_GO_Enrichments.csv", sep = "\t", header = T))
+```
+
+#repeat key steps for just early samples 1,3,5 to compare with mouse
+
+```{r}
+sampleTypes135 <- paste(unique(sampleMetaData$sampleType)[c(1,3,5:6, 8, 10:11, 13, 15:16, 18, 20)], "E", sep = "")
+
+sample_unique_info135 <- data.frame(sample = sampleTypes135, comparisons1 = NA, comparisons2= NA)
+
+#create sample and control sets
+for (samp in sampleTypes135){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 3
+  }
+  #check if digit 3
+  if (samp_info[3] == "3"){
+    comp_digits <- c(1, 5)
+  }
+  #check if digit 5
+  if (samp_info[3] == "5"){
+    comp_digits <- c(3)
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if phalanges
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+        digit_comp <- paste(samp_info[1], alt_region, samp_info[3], samp_info[4], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], samp_info[4], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], samp_info[4], sep = "")
+  sample_unique_info135$comparisons1[which(sample_unique_info135$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp)))
+  sample_unique_info135$comparisons2[which(sample_unique_info135$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, sep = "|")
+}
+
+#add key to convert between my nomenclature and something less easy to misinterpret
+autopod_key_notp <- data.frame(autopod_abrevs = c("FM1", "FM2", "FM3", "FM4", "FM5", 
+                    "FP1", "FP2", "FP3", "FP4", "FP5", 
+                    "HM1", "HM2", "HM3", "HM4", "HM5", 
+                    "HP1", "HP2", "HP3", "HP4", "HP5"), autopod_tissues = c("METATARSAL1", "METATARSAL2", "METATARSAL3", "METATARSAL4", "METATARSAL5", 
+                                   "FOOTPHALANGES1", "FOOTPHALANGES2", "FOOTPHALANGES3", "FOOTPHALANGES4", "FOOTPHALANGES5", 
+                                   "METACARPAL1", "METACARPAL2", "METACARPAL3", "METACARPAL4", "METACARPAL5", 
+                                   "HANDPHALANGES1", "HANDPHALANGES2", "HANDPHALANGES3", "HANDPHALANGES4", "HANDPHALANGES5"))
+autopod_key_early <- autopod_key_notp 
+autopod_key_late <- autopod_key_notp 
+autopod_key_early$autopod_abrevs <- paste(autopod_key_early$autopod_abrevs, "E", sep = "")
+autopod_key_late$autopod_abrevs <- paste(autopod_key_late$autopod_abrevs, "L", sep = "")
+autopod_key_early$autopod_tissues <- paste(autopod_key_early$autopod_tissues, "E", sep = "")
+autopod_key_late$autopod_tissues <- paste(autopod_key_late$autopod_tissues, "L", sep = "")
+  
+autopod_key <- rbind(autopod_key_early, autopod_key_late)
+autopod_key135 <- autopod_key_early[c(1,3,5:6, 8, 10:11, 13, 15:16, 18, 20),]
+
+# #create dataframe to store results
+ human_DEGs135 <- data.frame()
+#
+ #iterate over each sample
+ for (i in 1:length(sampleTypes135)){
+   #find number of
+   comp_samples <- unlist(sample_unique_info135$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, grep(paste(sample_unique_info135$sample[i], comp_samples[c], sep = "|"), names(ct)))
+     good_data <- ct[,colsToKeep]
+     filteredMetaData <- sampleMetaData %>% dplyr::filter(sampleTypeTP %in% c(sample_unique_info135$sample[i], comp_samples[c]))
+filteredMetaData$sampleTypeTP <- factor(filteredMetaData$sampleTypeTP, levels = c(sample_unique_info135$sample[i], comp_samples[c]))
+
+     test_output <- runDESEQ2_df_hs(design_in = formula(~replicate + sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     #fix column names
+     names(test_output)[1] <- "ensembl_gene_id"
+     names(test_output)[8] <- "hgnc_symbol"
+     test_output$tissue1 <- autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == sample_unique_info135$sample[i])]
+     test_output$tissue2 <- autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == comp_samples[c])]
+     if(nrow(test_output) > 0){
+     human_DEGs <- rbind(human_DEGs135, test_output)
+     }
+     #note if no DEGs identified
+     if(nrow(test_output) == 0){
+     test_output <- data.frame(ensembl_gene_id = NA,  baseMean = NA, log2FoldChange = NA, lfcSE = NA, stat = NA, pvalue= NA, padj = NA, hgnc_symbol= "NO_DEGs_FOUND", tissue1=autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == sample_unique_info135$sample[i])], tissue2= autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == comp_samples[c])])
+     }
+     human_DEGs135 <- rbind(human_DEGs135, test_output)
+   }
+ }
+ 
+ sampleMetaData_early135 <- sampleMetaData %>% dplyr::filter(timepoint == "Early") %>% dplyr::filter(digit %in% c("I", "III", "V"))
+ #now identify gradient genes
+dds <- DESeqDataSetFromMatrix(countData = ct[, c(1, which(colnames(ct) %in% rownames(sampleMetaData_early135)))], colData = sampleMetaData_early135, design = ~replicate + digit, tidy = T)
+dds <- DESeq(dds, test="LRT", reduced=~replicate)
+dds_res <- results(dds, alpha = 0.05)
+dds_res_df <- merge(x= as.data.frame(dds_res), by.x ='row.names',  y = annot,
+  by.y = 'ensembl_gene_id', no.dups = TRUE) %>% dplyr::filter(padj < 0.05)
+
+#reform to add to human DEG object
+colnames(dds_res_df)[1] <- "ensembl_gene_id"
+dds_res_df$tissue1 <- "GRADIENT"
+dds_res_df$tissue2 <- "GRADIENT"
+dds_res_df$gene_biotype <- NULL
+
+human_DEGs1352 <- rbind(human_DEGs135, dds_res_df) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58 )
+
+write_delim(x = as.data.frame(human_DEGs1352), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_early.tsv", delim = "\t")
+
+human_DEGs135 <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_early.tsv", sep = "\t", header = T))
+
+length(intersect(human_DEGs_early$ensembl_gene_id, human_DEGs1352$ensembl_gene_id))
+```
+
+## 135 comparison late
+
+```{r}
+autopod_key135 <- autopod_key_late[c(1,3,5:6, 8, 10:11, 13, 15:16, 18, 20),]
+sampleTypes135_late <- gsub(pattern = "E", x = sampleTypes135, replacement = "L", )
+
+sampleTypes135 <- paste(unique(sampleMetaData$sampleType)[c(1,3,5:6, 8, 10:11, 13, 15:16, 18, 20)], "L", sep = "")
+
+sample_unique_info135 <- data.frame(sample = sampleTypes135, comparisons1 = NA, comparisons2= NA)
+
+#create sample and control sets
+for (samp in sampleTypes135){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 3
+  }
+  #check if digit 3
+  if (samp_info[3] == "3"){
+    comp_digits <- c(1, 5)
+  }
+  #check if digit 5
+  if (samp_info[3] == "5"){
+    comp_digits <- c(3)
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if phalanges
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+        digit_comp <- paste(samp_info[1], alt_region, samp_info[3], samp_info[4], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], samp_info[4], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], samp_info[4], sep = "")
+  sample_unique_info135$comparisons1[which(sample_unique_info135$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp)))
+  sample_unique_info135$comparisons2[which(sample_unique_info135$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, sep = "|")
+}
+
+# #create dataframe to store results
+ human_DEGs135 <- data.frame()
+#
+ #iterate over each sample
+ for (i in 1:length(sampleTypes135_late)){
+   #find number of
+   comp_samples <- unlist(sample_unique_info135$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, grep(paste(sample_unique_info135$sample[i], comp_samples[c], sep = "|"), names(ct)))
+     good_data <- ct[,colsToKeep]
+     filteredMetaData <- sampleMetaData %>% dplyr::filter(sampleTypeTP %in% c(sample_unique_info135$sample[i], comp_samples[c]))
+filteredMetaData$sampleTypeTP <- factor(filteredMetaData$sampleTypeTP, levels = c(sample_unique_info135$sample[i], comp_samples[c]))
+
+     test_output <- runDESEQ2_df_hs(design_in = formula(~replicate + sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     #fix column names
+     names(test_output)[1] <- "ensembl_gene_id"
+     names(test_output)[8] <- "hgnc_symbol"
+     test_output$tissue1 <- autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == sample_unique_info135$sample[i])]
+     test_output$tissue2 <- autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == comp_samples[c])]
+     if(nrow(test_output) > 0){
+     human_DEGs <- rbind(human_DEGs135, test_output)
+     }
+     # #note if no DEGs identified
+     # if(nrow(test_output) == 0){
+     # test_output <- data.frame(ensembl_gene_id = NA,  baseMean = NA, log2FoldChange = NA, lfcSE = NA, stat = NA, pvalue= NA, padj = NA, hgnc_symbol= "NO_DEGs_FOUND", tissue1=autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == sample_unique_info135$sample[i])], tissue2= autopod_key135$autopod_tissues[which(autopod_key135$autopod_abrevs == comp_samples[c])])
+     # }
+     if(nrow(test_output) > 0){
+      human_DEGs135 <- rbind(human_DEGs135, test_output)
+     }
+   }
+ }
+ 
+ sampleMetaData_late135 <- sampleMetaData %>% dplyr::filter(timepoint == "Late") %>% dplyr::filter(digit %in% c("I", "III", "V"))
+ #now identify gradient genes
+dds <- DESeqDataSetFromMatrix(countData = ct[, c(1, which(colnames(ct) %in% rownames(sampleMetaData_late135)))], colData = sampleMetaData_late135, design = ~replicate + digit, tidy = T)
+dds <- DESeq(dds, test="LRT", reduced=~replicate)
+dds_res <- results(dds, alpha = 0.05)
+dds_res_df <- merge(x= as.data.frame(dds_res), by.x ='row.names',  y = annot,
+  by.y = 'ensembl_gene_id', no.dups = TRUE) %>% dplyr::filter(padj < 0.05)
+
+#reform to add to human DEG object
+colnames(dds_res_df)[1] <- "ensembl_gene_id"
+dds_res_df$tissue1 <- "GRADIENT"
+dds_res_df$tissue2 <- "GRADIENT"
+dds_res_df$gene_biotype <- NULL
+
+human_DEGs1352 <- rbind(human_DEGs135, dds_res_df) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58 )
+
+write_delim(x = as.data.frame(human_DEGs1352), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_late.tsv", delim = "\t")
+
+human_DEGs135_late <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_late.tsv", sep = "\t", header = T))
+
+length(intersect(human_DEGs_late$ensembl_gene_id, human_DEGs135_late$ensembl_gene_id))
+```
+
+##comparison of human autopod module sets
+
+```{r}
+#load data
+human_modules <- read_tsv(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_gene_clusters_both_tps.tsv")
+human_modules_early <- read_tsv(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_early_gene_modules.tsv")
+human_modules_late <- read_tsv(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_late_gene_modules.tsv")
+mouse_modules <- read_tsv(file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_gene_clusters.tsv")
+
+length(unique(human_modules$cluster))
+length(unique(human_modules_early$cluster))
+length(unique(human_modules_late$cluster))
+
+for (i in 1:9){
+  shared_genes <- length(intersect(human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == 5)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+}
+
+for (i in 1:9){
+  shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 2)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+}
+
+for (i in 1:4){
+  shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 2)], human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == i)]))
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+}
+
+for (i in 1:12){
+  shared_genes <- length(intersect(human_modules$ensembl_gene_id[which(human_modules$cluster == 5)], mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)])))
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+}
+
+#DEGs per comparison
+mouse_DEGs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", sep = "\t", header = T))
+
+length(intersect(human_DEGs2$ensembl_gene_id, mouse_to_human_gene(mouse_DEGs$ensembl_gene_id)))
+```
+
+##timepoint analysis
+
+```{r}
+timepoint_DEGs <- runDESEQ2_df_hs(design_in = formula(~timepoint), count_data = ct, col_data =  sampleMetaData) %>% dplyr::filter(abs(log2FoldChange) > 0.58)
+
+length(which(timepoint_DEGs$log2FoldChange > 0))
+length(which(timepoint_DEGs$log2FoldChange < 0))
+
+#timepoint_DEGs <- read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs.tsv", sep = "\t", header = T)
+write.table(x = timepoint_DEGs , file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs.tsv", sep = "\t", col.names = T)
+
+late_GO <- simple_go_analysis(timepoint_DEGs$rsem_annot.hgnc_symbol[which(timepoint_DEGs$log2FoldChange > 0)])
+late_GO$timepoint <- "LATE"
+
+early_GO <- simple_go_analysis(timepoint_DEGs$rsem_annot.hgnc_symbol[which(timepoint_DEGs$log2FoldChange < 0)])
+early_GO$timepoint <- "Early"
+
+timepoint_GO <- rbind(early_GO, late_GO)
+
+  timepoint_GO$GeneRatio <- paste("'", timepoint_GO$GeneRatio, "'", sep ="")
+  timepoint_GO$BgRatio <- paste("'", timepoint_GO$BgRatio, "'", sep ="")
+  write.csv(timepoint_GO, file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs_GO_enrichments.csv", row.names = F)
+```
