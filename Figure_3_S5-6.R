@@ -3,7 +3,7 @@
 #June 6, 2025
 library(magick)
 
-#note that images read in are created in the Figure_4_S7-8 script.
+#note that images read in are created in the Figure_4_S7-9 script.
 
 #create function to all for modification of all file reading simultaneously
 read_image_gg <- function(file){
