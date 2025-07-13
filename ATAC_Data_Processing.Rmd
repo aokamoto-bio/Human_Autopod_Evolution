@@ -1,0 +1,490 @@
+---
+title: "ATAC_Data_Cluster_Processing"
+author: "Alexander Okamoto"
+date: "2025-5-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Human ATAC-seq Data Analysis
+
+# Initially processing of ATAC-seq sequencing data was performed on the Harvard FAS Cluster. Examples of the code run are included below. 
+
+#Steps included:
+
+## Adapter Trimming
+
+To trim adapaters I used NGmerge (Gaspar et al. *Bioinformatics* 2018). The -e 30 parameter was chosen based on <https:/github.com/jsh58/NGmerge/issues/6>.
+
+
+##Alignment to the genome
+
+After adapter trimming, reads were aligning to the human genome. To do this, I downloaded the UCSC hg38 genome prebuild reference from Illumina (http://igenomes.illumina.com.s3-website-us-east-1.amazonaws.com/Homo_sapiens/UCSC/hg38/Homo_sapiens_UCSC_hg38.tar.gz)
+
+##Duplicate/mitochrondrial read removal
+I used Picard to remove duplicate reads, then John Gaspar’s removeChrom.pymethod to remove mitochondrial reads.
+
+## Peak Calling using MACS2
+
+## Identify reproducible consensus peaks using IDR.
+
+I then use Daniel Richard’s IDR pipeline to call consensus peaks, which is contained in the file "IDR_script_APRIL2021_CUSTOM_CUTOFFS.R"
+
+## Here is the script that combines all this to fully process the tissues from a single individual sample to MACS2 peak calling
+
+```{bash, eval=FALSE}
+
+#load modules
+module load NGmerge/0.2-fasrc01
+module load centos6/0.0.1-fasrc01
+module load intel/2017c impi/2017.4.239 Bowtie2/2.3.4.1
+module load samtools/1.10-fasrc01
+module load picard/2.9.0-fasrc01
+module load ATAC-seq
+module load macs2/2.1.1.20160309-fasrc02
+
+#set variables
+rep_id="28829"
+location1="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221129_A00794_0742_AHGWKNDSX5_SUB13550/fastq/H28829_other"
+location2="/n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221129_A00794_0742_AHGWKNDSX5_SUB13550/fastq/H28829_mouse2"
+
+#if needed, make directory for output reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files
+fi
+
+#if needed, make directory for trimmed reads
+
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads
+fi
+
+#if needed, make directory for aligned reads
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_Aligned" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_Aligned exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_Aligned
+fi
+
+#if needed, make directory for Picard output
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output/ exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output
+fi
+
+#if needed, make directory for Gaspar remove mitochondria output
+if [ -d "/n/holyscratch01/capellini_lab/aokamoto/Human_noMT" ]; 
+then
+  echo "Output directory /n/holyscratch01/capellini_lab/aokamoto/Human_noMT exists."
+  
+else
+  mkdir /n/holyscratch01/capellini_lab/aokamoto/Human_noMT
+fi
+
+#iterate over samples
+for sample in HP1 HP2 HP3 HP4 HP5 HM1 HM2 HM3 HM4 HM5 FP1 FP2 FP3 FP4 FP5 FM1 FM2 FM3 FM4 FM5
+
+do 
+
+#concatenate reads if needed because a sample had to be run twice
+file1=$(find ${location1} -name ${rep_id}_${sample}*_R1_001.fastq.gz)
+file3=$(find ${location1} -name ${rep_id}_${sample}*_R2_001.fastq.gz)
+file2=$(find ${location2} -name ${rep_id}_${sample}*_R1_001.fastq.gz)
+file4=$(find ${location2} -name ${rep_id}_${sample}*_R2_001.fastq.gz)
+
+#determine how many files found an concatenate as needed
+if [[ -f ${file1} && ! -f ${file2} ]]; 
+then
+  cp ${file1} /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cp ${file3} /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "Only ${file1} found."
+elif [[ ! -f ${file1} && -f ${file2} ]]; then
+  cp ${file2} /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cp ${file4} /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "Only ${file2} found."
+elif [[ -f ${file1} && -f ${file2} ]]; then
+  cat ${file1} ${file2} > /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cat ${file3} ${file4} > /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "${file1} and ${file2} found."
+fi
+
+echo "Trimming adaptors using NGmerge"
+
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 36
+
+echo "Aligning ${sample} to UCSC hg38 genome."
+
+bowtie2 \
+-X 2000 \
+-t \
+-p 36 \
+-x /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome \
+--very-sensitive \
+-1 /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed_1.fastq.gz \
+-2 /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed_2.fastq.gz | samtools view -bS - | samtools sort -o /n/holyscratch01/capellini_lab/aokamoto/Human_Aligned/${rep_id}_${sample}_coordSort.bam
+
+echo "Align and sort for ${rep_id} ${sample} completed."
+
+samtools index /n/holyscratch01/capellini_lab/aokamoto/Human_Aligned/${rep_id}_${sample}_coordSort.bam /n/holyscratch01/capellini_lab/aokamoto/Human_Aligned/${rep_id}_${sample}_coordSort.bai
+
+echo "Indexing for ${rep_id} ${sample} completed."
+
+sample_file="/n/holyscratch01/capellini_lab/aokamoto/Human_Aligned/${rep_id}_${sample}_coordSort.bam"
+outfile="/n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output/${rep_id}_${sample}_picard-mrkdup.bam"
+metrics="/n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output/${rep_id}_${sample}_picard-mrkdup_metrics.txt"
+
+echo "Marking duplicates for ${rep_id} ${sample}"
+
+java -jar $PICARD_TOOLS_HOME/picard.jar MarkDuplicates \
+      I=$sample_file \
+      O=$outfile \
+      M=$metrics
+
+#index new file with duplicates removed
+samtools index $outfile
+
+inBAM="/n/holyscratch01/capellini_lab/aokamoto/Human_Picard_output/${rep_id}_${sample}_picard-mrkdup.bam"
+noMT="/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${rep_id}_${sample}.noMT.bam"
+
+echo "Removing mito reads from ${inBAM} using removeChrom.py"
+
+#output new bam file without mitochondrial reads
+samtools view -h $inBAM | removeChrom - - chrM | samtools view -b - > $noMT
+
+echo "Calling peaks for ${sample} using MACS2"
+
+macs2 callpeak \
+   -t ${noMT} \
+   -n ${rep_id}_${sample} \
+   -f BAMPE \
+   -g hs \
+   --outdir "/n/holyscratch01/capellini_lab/aokamoto/macs2output" \
+   --nolambda \
+   --keep-dup all \
+   --bdg \
+   --verbose 3
+
+echo "Success!"
+done
+```
+
+#Now, call IDR script
+
+```{bash, eval = FALSE}
+module load centos6/0.0.1-fasrc01
+module load macs2/2.1.1.20160309-fasrc02
+module load samtools/1.10-fasrc01
+module load Anaconda3/2020.11
+module load R/4.1.0-fasrc01
+source activate /n/home04/aokamoto/miniconda3/envs/idr_py
+
+id_1='29067'
+id_2='29042'
+id_3='28680'
+stage="late"
+
+for sample in HP1 HP2 HP4 HP5 HM1 HM2 HM4 HM5 FP1 FP2 FP3 FP4 FP5 FM1 FM2 FM3 FM4 FM5
+
+do
+
+inbam1="/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${id_1}_${sample}.noMT.bam"
+inbam2="/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${id_2}_${sample}.noMT.bam"
+inbam3="/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${id_3}_${sample}.noMT.bam"
+
+inpeaks1="/n/holyscratch01/capellini_lab/aokamoto/macs2output/${id_1}_${sample}_peaks.narrowPeak"
+inpeaks2="/n/holyscratch01/capellini_lab/aokamoto/macs2output/${id_2}_${sample}_peaks.narrowPeak"
+inpeaks3="/n/holyscratch01/capellini_lab/aokamoto/macs2output/${id_3}_${sample}_peaks.narrowPeak"
+
+echo "Creating combined peak file for ${sample}"
+rm ${sample}_${stage}_peakset.txt
+echo ${inpeaks1} > ${sample}_${stage}_peakset.txt
+echo ${inpeaks2} >> ${sample}_${stage}_peakset.txt
+echo ${inpeaks3} >> ${sample}_${stage}_peakset.txt
+
+echo "Merging replicates for  ${sample} using samtools"
+
+samtools merge -o "/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${sample}_${stage}_pooled.bam" ${inbam1} ${inbam2} ${inbam3}
+
+echo "Calling peaks for ${sample} using MACS2"
+
+macs2 callpeak \
+   -t "/n/holyscratch01/capellini_lab/aokamoto/Human_noMT/${sample}_${stage}_pooled.bam" \
+   -n ${sample}_${stage}_pooled \
+   -f BAMPE \
+   -g hs \
+   --outdir "/n/holyscratch01/capellini_lab/aokamoto/macs2output" \
+   --nolambda \
+   --keep-dup all \
+   --bdg \
+   --verbose 3
+   
+echo "Calculating IDR peak set for ${stage} ${sample}"
+
+Rscript IDR_script_APRIL2021_CUSTOM_CUTOFFS.R idr_calling_updated ${sample}_${stage}_peakset.txt /n/holyscratch01/capellini_lab/aokamoto/macs2output/${sample}_${stage}_pooled_peaks.narrowPeak /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/
+
+echo "Success!"
+
+done
+```
+
+## Finally, filter using embryonic brain peak data, generate BED files 
+
+```{bash, eval = FALSE}
+for sample in HP1 HP2 HP3 HP4 HP5 HM1 HM2 HM3 HM4 HM5 FP1 FP2 FP3 FP4 FP5 FM1 FM2 FM3 FM4 FM5
+
+do
+
+bedtools subtract -A -a /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopod_IDR_peaks/${sample}_late_pooled_peaks_replicate_consolidated_IDR_threshold0.05.narrowPeak -b /Users/alexanderokamoto/Desktop/Capellini_Lab/Brain_ATAC_Files/human_brain_E54_peaks_hg38.bed > /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopod_IDR_peaks/Brain_Filtered/${sample}_late_IDR_0.05_brain_filtered.narrowPeak
+
+done
+
+#now create BED files 
+for sample in HP1 HP2 HP3 HP4 HP5 HM1 HM2 HM3 HM4 HM5 FP1 FP2 FP3 FP4 FP5 FM1 FM2 FM3 FM4 FM5
+
+do
+
+cut -f 1-3 /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopod_IDR_peaks/Brain_Filtered/${sample}_late_IDR_0.05_brain_filtered.narrowPeak > /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopod_IDR_peaks/Brain_Filtered/${sample}_late_IDR_0.05_brain_filtered.bed
+
+done
+```
+
+## MOUSE
+
+Mouse ATAC-seq sequencing data was processed similarly, except using the mouse mm10 genome and Mac3 software due an update to the software ocurring during the course of this research. The script is below:
+
+```{bash, eval = FALSE}
+
+#load modules
+module load python/3.12.5-fasrc01
+module load gcc/14.2.0-fasrc01
+conda activate bedfiles
+
+#if needed, make directory for output reads
+
+if [ -d "$SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files" ]; 
+then
+  echo "Output directory $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files exists."
+  
+else
+  mkdir $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files
+fi
+
+#if needed, make directory for trimmed reads
+
+if [ -d "$SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads" ]; 
+then
+  echo "Output directory $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads exists."
+  
+else
+  mkdir $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads
+fi
+
+#if needed, make directory for aligned reads
+if [ -d "$SCRATCH/capellini_lab/Lab/Mouse_Aligned" ]; 
+then
+  echo "Output directory $SCRATCH/capellini_lab/Lab/Mouse_Aligned exists."
+  
+else
+  mkdir $SCRATCH/capellini_lab/Lab/Mouse_Aligned
+fi
+
+#if needed, make directory for Picard output
+if [ -d "$SCRATCH/capellini_lab/Lab/Mouse_Picard_output" ]; 
+then
+  echo "Output directory $SCRATCH/capellini_lab/Lab/Mouse_Picard_output/ exists."
+  
+else
+  mkdir $SCRATCH/capellini_lab/Lab/Mouse_Picard_output
+fi
+
+#if needed, make directory for Gaspar remove mitochondria output
+if [ -d "$SCRATCH/capellini_lab/Lab/Mouse_noMT" ]; 
+then
+  echo "Output directory $SCRATCH/capellini_lab/Lab/Mouse_noMT exists."
+  
+else
+  mkdir $SCRATCH/capellini_lab/Lab/Mouse_noMT
+fi
+
+#concatenate reads if needed
+rep_id="rep3"
+rep_id_two="Mouse3"
+
+for sample in FM1 FM3 FM5 FP1 FP3 FP5 HM1 HM3 HM5 HP1 HP3 HP5
+
+do 
+
+file1=$(find /n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221222_A00794_0761_AHHTVMDSX5_SUB13574/fastq/Mouse3andH29067 -name ${rep_id_two}_${sample}*_R1_001.fastq.gz)
+file3=$(find /n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221222_A00794_0761_AHHTVMDSX5_SUB13574/fastq/Mouse3andH29067 -name ${rep_id_two}_${sample}*_R2_001.fastq.gz)
+file2=$(find /n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221129_A00794_0742_AHGWKNDSX5_SUB13550/fastq/H28829_mouse2 -name ${rep_id}_${sample}*_R1_001.fastq.gz)
+file4=$(find /n/capellini_lab/users/aokamoto/Autopod_Project/Sequencing_Data/221129_A00794_0742_AHGWKNDSX5_SUB13550/fastq/H28829_mouse2 -name ${rep_id}_${sample}*_R2_001.fastq.gz)
+
+if [[ -f ${file1} && ! -f ${file2} ]]; 
+then
+  cp ${file1} $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cp ${file3} $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "Only ${file1} found."
+elif [[ ! -f ${file1} && -f ${file2} ]]; then
+  cp ${file2} $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cp ${file4} $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "Only ${file2} found."
+elif [[ -f ${file1} && -f ${file2} ]]; then
+  cat ${file1} ${file2} > $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz
+  cat ${file3} ${file4} > $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz
+  echo "${file1} and ${file2} found."
+fi
+
+/n/capellini_lab/users/aokamoto/Software/NGmerge-master/NGmerge -a -1 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 36
+
+echo "Aligning ${sample} to UCSC mm10 genome."
+
+bowtie2 \
+-X 2000 \
+-t \
+-p 36 \
+-x /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/genome \
+--very-sensitive \
+-1 $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed_1.fastq.gz \
+-2 $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed_2.fastq.gz | samtools view -bS - | samtools sort -o $SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort.bam
+
+echo "fixing samtools format."
+samtools addreplacerg -r "@RG\tID:RG1\tSM:SampleName\tPL:Illumina\tLB:Library.fa" -o $SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort2.bam $SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort.bam
+
+echo "Align and sort for ${rep_id} ${sample} completed."
+
+samtools index $SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort2.bam $SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort.bai
+
+echo "Indexing for ${rep_id} ${sample} completed."
+
+sample_file="$SCRATCH/capellini_lab/Lab/Mouse_Aligned/${rep_id}_${sample}_coordSort2.bam"
+outfile="$SCRATCH/capellini_lab/Lab/Mouse_Picard_output/${rep_id}_${sample}_picard-mrkdup.bam"
+metrics="$SCRATCH/capellini_lab/Lab/Mouse_Picard_output/${rep_id}_${sample}_picard-mrkdup_metrics.txt"
+
+echo "Marking duplicates for ${rep_id} ${sample}"
+
+java -jar /n/capellini_lab/users/aokamoto/Software/picard-master/picard.jar MarkDuplicates \
+      -I $sample_file \
+      -O $outfile \
+      -M $metrics
+
+#index new file with duplicates removed
+samtools index $outfile
+
+inBAM="$SCRATCH/capellini_lab/Lab/Mouse_Picard_output/${rep_id}_${sample}_picard-mrkdup.bam"
+noMT="$SCRATCH/capellini_lab/Lab/Mouse_noMT/${rep_id}_${sample}.noMT.bam"
+
+echo "Removing mito reads from ${inBAM} using removeChrom.py"
+
+#output new bam file without mitochondrial reads
+samtools view -h $inBAM | python /n/capellini_lab/users/aokamoto/Software/removeChrom.py - - chrM | samtools view -b - > $noMT
+
+echo "Calling peaks for ${sample} using MACS2"
+
+/n/home04/aokamoto/.local/bin/macs3 callpeak \
+   -t ${noMT} \
+   -n ${rep_id}_${sample} \
+   -f BAMPE \
+   -g mm \
+   --outdir "$SCRATCH/capellini_lab/Lab/macs2output" \
+   --nolambda \
+   --keep-dup all \
+   --bdg \
+   --verbose 3
+
+echo "Success against all odds!"
+done
+```
+
+#Now, call IDR script
+
+```{bash, eval = FALSE}
+module load python/3.12.5-fasrc01
+module load gcc/14.2.0-fasrc01
+conda activate bedfiles
+
+id_1='rep1'
+id_2='rep2'
+id_3='rep3'
+
+for sample in HP1 HP3 HP5 HM1 HM3 HM5 FP1 FP3 FP5 FM1 FM3 FM5
+
+do
+
+inbam1="$SCRATCH/capellini_lab/Lab/Mouse_noMT/${id_1}_${sample}.noMT.bam"
+inbam2="$SCRATCH/capellini_lab/Lab/Mouse_noMT/${id_2}_${sample}.noMT.bam"
+inbam3="$SCRATCH/capellini_lab/Lab/Mouse_noMT/${id_3}_${sample}.noMT.bam"
+
+inpeaks1="$SCRATCH/capellini_lab/Lab/macs2output/${id_1}_${sample}_peaks.narrowPeak"
+inpeaks2="$SCRATCH/capellini_lab/Lab/macs2output/${id_2}_${sample}_peaks.narrowPeak"
+inpeaks3="$SCRATCH/capellini_lab/Lab/macs2output/${id_3}_${sample}_peaks.narrowPeak"
+
+echo "Creating combined peak file for ${sample}"
+rm mouse_${sample}_peakset.txt
+echo ${inpeaks1} > mouse_${sample}_peakset.txt
+echo ${inpeaks2} >> mouse_${sample}_peakset.txt
+echo ${inpeaks3} >> mouse_${sample}_peakset.txt
+
+echo "Merging replicates for  ${sample} using samtools"
+
+samtools merge "$SCRATCH/capellini_lab/Lab/Mouse_noMT/${sample}_pooled.bam" ${inbam1} ${inbam2} ${inbam3}
+
+echo "Calling peaks for ${sample} using MACS2"
+
+macs3 callpeak \
+-t "$SCRATCH/capellini_lab/Lab/Mouse_noMT/${sample}_pooled.bam" \
+-n mouse_${sample}_pooled \
+-f BAMPE \
+-g mm \
+--outdir "$SCRATCH/capellini_lab/Lab/macs2output" \
+--nolambda \
+--keep-dup all \
+--bdg \
+--verbose 3
+   
+echo "Calculating IDR peak set for ${stage} ${sample}"
+
+Rscript IDR_script_APRIL2021_CUSTOM_CUTOFFS.R idr_calling_updated mouse_${sample}_peakset.txt $SCRATCH/capellini_lab/Lab/macs2output/mouse_${sample}_pooled_peaks.narrowPeak /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_ATAC/IDR_called_peaks/
+
+echo "Success!"
+
+done
+```
+
+#brain filtering and bed file generation
+
+```{bash, eval = FALSE}
+for sample in HP1 HP3 HP5 HM1 HM3 HM5 FP1 FP3 FP5 FM1 FM3 FM5
+
+do
+
+bedtools subtract -A -a mouse_${sample}_pooled_peaks_replicate_consolidated_IDR_threshold0.05.narrowPeak -b /Users/alexanderokamoto/Desktop/Capellini_Lab/Capellini_lab_Peak_Sets/Brain_ATAC_Files/mouse_all_files_aggregated_brain.bed > Brain_Filtered/mouse_${sample}_IDR_0.05_brain_filtered.narrowPeak
+
+done
+
+#now create BED files 
+for sample in HP1 HP3 HP5 HM1 HM3 HM5 FP1 FP3 FP5 FM1 FM3 FM5
+
+do
+
+cut -f 1-4 Brain_Filtered/mouse_${sample}_IDR_0.05_brain_filtered.narrowPeak > Brain_Filtered/mouse_${sample}_IDR_0.05_brain_filtered.bed
+
+done
+```
+
