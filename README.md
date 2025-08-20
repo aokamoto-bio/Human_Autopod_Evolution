@@ -1,6 +1,8 @@
 # Human_Autopod_Evolution
 
-Code for "Complex genetic architecture underlies human hand and foot evolution"
+Code for the preprint: 
+
+Terence Capellini, Alexander Okamoto, Gayani Senevirathne et al. Complex genetic architecture underlies human hand and foot evolution, 18 August 2025, PREPRINT (Version 1) available at Research Square [https://doi.org/10.21203/rs.3.rs-7124496/v1]
 
 Initial processing of the sequencing data was performed on the Harvard FAS computing cluster. Other parts of this script were written for a smaller, internal lab computing cluster. It may not work on a personal computer.
 
