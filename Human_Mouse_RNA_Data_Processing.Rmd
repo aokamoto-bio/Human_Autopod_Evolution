@@ -194,7 +194,7 @@ do
 
 echo "Generating RSEM output file for ${sample}"
 
-rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Human_RNA/RSEM_Output/${sample}
+rsem-calculate-expression --num-threads 36 --forward-prob 0 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Human_RNA/RSEM_Output/${sample}
 
 done
 ```
@@ -481,7 +481,7 @@ do
 
 echo "Generating RSEM output file for ${sample}"
 
-rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_altAligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}_alt
+rsem-calculate-expression --num-threads 36 --forward-prob 0.5 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_altAligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}_alt
 
 echo "Finished RSEM run for ${sample}"
 
