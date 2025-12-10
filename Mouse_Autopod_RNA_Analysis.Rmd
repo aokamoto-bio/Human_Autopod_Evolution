@@ -1,13 +1,13 @@
 ---
 title: "Mouse Autopod RNA Analysis"
 author: "Alexander Okamoto"
-date: "2025-05-26"
+date: "2025-12-10"
 output: html_document
 ---
 ##set filepath
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced/')
+knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced Corrected/')
 ```
 
 ##load required packages
@@ -55,7 +55,7 @@ sampleMetaData$sex <- as.factor(sampleMetaData$sex)
 sampleMetaData <- sampleMetaData[-which(sampleMetaData$prep == "KAPA"),]
 
 #load the counts data
-mouse_ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced/")
+mouse_ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/Mouse RSEM Output Reduced Corrected/")
 ```
 
 ##load in ENSEMBL mouse gene data
@@ -110,7 +110,7 @@ for (samp in sampleTypes){
   if (samp_info[3] == "3"){
     comp_digits <- c(1, 5)
   }
-  #check if digit 5
+  #check if digit 1
   if (samp_info[3] == "5"){
     comp_digits <- c(3)
   }
@@ -179,7 +179,10 @@ for (i in 1:length(sampleTypes)){
 }
 
 ## Need to add log2fold change cutoff
-write_delim(x = as.data.frame(mouse_DEGs) %>% dplyr::filter(abs(log2FoldChange) > 0.58 ), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", delim = "\t")
+write_delim(x = as.data.frame(mouse_DEGs) %>% dplyr::filter(abs(log2FoldChange) > 0.58), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", delim = "\t")
+
+length(unique(mouse_DEGs2$ensembl_gene_id[which(mouse_DEGs2$tissue1 != "GRADIENT")]))
+length(unique(mouse_DEGs2$ensembl_gene_id[which(mouse_DEGs2$tissue1 == "GRADIENT")]))
 ```
 
 #load in the saved DEG data
@@ -204,7 +207,7 @@ dds_res_df$gene_biotype <- NULL
 mouse_DEGs2 <- rbind(mouse_DEGs, dds_res_df) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58 )
 
 #get total number of unique DEGs
-length(unique(mouse_DEGs2$mgi_symbol))
+length(unique(mouse_DEGs2$ensembl_gene_id))
 
 #see distribution of DEGs between pairwise comparisons
 table(paste(mouse_DEGs2$tissue1, mouse_DEGs2$tissue2, sep = "_")) %>% sort()
@@ -214,7 +217,7 @@ write_delim(x = mouse_DEGs2, file= "/Users/alexanderokamoto/Desktop/Capellini_La
 ```
 
 ## Module Analysis Using WGNCA
-I followed this tutoriaL: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
+I followed this tutorial: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
 ```{r}
 #perform initial DESeq to get normalized counts
 #glm design
@@ -243,7 +246,7 @@ assay(rsem.vst) <- mat
 normalized_counts <- assay(rsem.vst)
 
 #filter by DEGs
-mouse_DEGs_list <- unique(mouse_DEGs2$ensembl_gene_id)
+mouse_DEGs_list <- unique(mouse_DEGs$ensembl_gene_id)
 DEG_normalized_counts <- normalized_counts[which(row.names(normalized_counts) %in% mouse_DEGs_list),]
 
 #library(WGCNA)
@@ -368,7 +371,7 @@ for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
   
 plot_autopod_expression(mME_temp %>% 
                           dplyr::select(tissue, value), 
-                        file_name = paste("mouse_RNA_cluster_", i, sep = ""), opt_text = paste("n=", mME_temp$gene_n[1], sep =""), center = T, center_color_value = 0)
+                        file_name = paste("mouse_RNA_cluster_", i, sep = ""), opt_text = paste(mME_temp$gene_n[1], " genes", sep =""), center = T)
 }
 
 plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_0.png") %>%
@@ -397,9 +400,11 @@ plt11 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_11.png
   image_ggplot()
 plt12 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_12.png") %>%
   image_ggplot()
+plt13 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_RNA_cluster_13.png") %>%
+  image_ggplot()
 
 #generate and save plot
-mouse_RNA_clusters_wgcna <- plot_grid(plt0, plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, nrow =3, ncol = 5, labels = 0:12, align="hv")
+mouse_RNA_clusters_wgcna <- plot_grid(plt0, plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, plt13, nrow =3, ncol = 5, labels = 0:12, align="hv")
 ggsave(mouse_RNA_clusters_wgcna, device = "png", filename = "mouse_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10)
 
 ```
