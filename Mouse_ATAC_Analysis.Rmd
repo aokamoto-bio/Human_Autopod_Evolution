@@ -1,0 +1,553 @@
+---
+title: "Mouse ATAC Data Analysis"
+author: "Alexander Okamoto"
+date: "2025-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load packages
+
+```{r}
+library(ChIPQC)
+library(rtracklayer)
+library(DT)
+library(tidyverse)
+library(soGGi)
+library(GenomicRanges)
+
+library(readxl) #for loading excel files
+library(stringi) #for concatenating strings
+
+#load in plotting packages
+library(reshape2)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(cowplot)
+library(DESeq2)
+```
+
+#load in the new counts data
+
+```{r}
+#load read count information
+mouse_ATAC_peak_counts <- read.delim(file = "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_ATAC_peaks_countMatrix.txt", header = T)
+#clean up column names
+colnames(mouse_ATAC_peak_counts) <- gsub(
+  pattern = "X.n.netscratch.capellini_lab.Lab.Mouse_noMT.", 
+  replacement = "", x = colnames(mouse_ATAC_peak_counts) )
+colnames(mouse_ATAC_peak_counts) <- gsub(
+  pattern = ".noMT.bam", 
+  replacement = "", x = colnames(mouse_ATAC_peak_counts) )
+colnames(mouse_ATAC_peak_counts)[1] <- "peak"
+
+
+#Metadata is group you want to look at vs individual sample names
+mouse_ATAC_sampleMetaData <- data.frame(sample = colnames(mouse_ATAC_peak_counts)[7:42], 
+                             limbtype=c(rep(c(rep(c("Hind_limb"), 6), rep(c("Forelimb"), 6)), 3)), 
+                             
+                             digit=rep(c("I", "III", "V"), 12), 
+                             tissue = rep(c(rep("Metapodial", 3), rep("Phalange", 3), rep("Metapodial", 3), rep("Phalange", 3)), 3), 
+                             tissue2 = rep(c(rep("Metatarsal", 3), rep("HL_phalange", 3), rep("Metacarpal", 3), rep("FL_phalange", 3)), 3), 
+                             replicate = c(rep('rep1', 12), rep('rep2', 12), rep('rep3', 12)),
+                             sampleType = rep(c("FM1", "FM3", "FM5", "FP1", "FP3", "FP5","HM1", "HM3", "HM5", "HP1", "HP3", "HP5"), 3)
+                             )
+
+rownames(mouse_ATAC_sampleMetaData) <- mouse_ATAC_sampleMetaData$sample
+mouse_ATAC_sampleMetaData$limbtype <- as.factor(mouse_ATAC_sampleMetaData$limbtype)
+mouse_ATAC_sampleMetaData$replicate <- as.factor(mouse_ATAC_sampleMetaData$replicate)
+
+mouse_ATAC_peak_ct <- mouse_ATAC_peak_counts[,c(1, 7:42)]
+```
+
+## Run DESeq
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#reduced <- formula(~limbtype)
+
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = mouse_ATAC_peak_ct, colData = mouse_ATAC_sampleMetaData, design = design, tidy = T)
+
+#calculate DGE likelihood ratio test
+#LRT needs reduced. Just W t
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+
+#perform variance standardizing transformation
+rsem.vst <- vst(rsem.de)
+mat <- assay(rsem.vst)
+mm <- model.matrix(~replicate, colData(rsem.vst))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst)$replicate)
+assay(rsem.vst) <- mat
+
+# perform a PCA on the data in assay(x) for the selected genes
+mouse_sample_pca <- prcomp(t(assay(rsem.vst)))
+
+# Variance explained by PCs
+mouse_pc_eigenvalues <- mouse_sample_pca$sdev^2
+
+# create a "tibble" manually with 
+# a variable indicating the PC number
+# and a variable with the variances
+mouse_pc_eigenvalues <- tibble(PC = factor(1:length(mouse_pc_eigenvalues)), 
+                         variance = mouse_pc_eigenvalues) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+#visualize
+mouse_pc_eigenvalues %>% 
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction variance explained")
+
+# The PC scores are stored in the "x" value of the prcomp object
+mouse_pc_scores <- mouse_sample_pca$x %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+mouse_pc_scores_full <- merge(x = mouse_pc_scores, by.x = 'sample', by.y = "row.names", y = mouse_ATAC_sampleMetaData)
+
+mouse_atac_pca <- mouse_pc_scores_full %>% 
+  # create the plot
+  ggplot(aes(x = PC1, y = PC2, color = tissue2, shape = digit)) +
+  geom_point() + labs(x = paste0("PC1 (", round(mouse_pc_eigenvalues$pct[1], 2), "%)"), y = paste0("PC2 (", round(mouse_pc_eigenvalues$pct[2], 2), "%)"), color = "Limb Type", shape = "Tissue", title = "Mouse Autopod ATAC PCA") + theme(plot.title = element_text(hjust = 0.5))
+
+mouse_atac_pca
+
+ggsave(plot = mouse_atac_pca, width = 5, height = 3, dpi = 300, filename = "mouse_atac_PCA_plot.png")
+
+mouse_atac_pca_2 <- mouse_pc_scores_full %>% 
+  # create the plot
+  ggplot(aes(x = PC3, y = PC4, color = tissue2, shape = digit)) +
+  geom_point() + labs(x = paste0("PC1 (", round(mouse_pc_eigenvalues$pct[1], 2), "%)"), y = paste0("PC2 (", round(mouse_pc_eigenvalues$pct[2], 2), "%)"), color = "Limb Type", shape = "Tissue", title = "Mouse Autopod ATAC PCA") + theme(plot.title = element_text(hjust = 0.5))
+
+mouse_atac_pca
+
+ggsave(plot = mouse_atac_pca_2, width = 5, height = 3, dpi = 300, filename = "mouse_atac_PCA_plot_PC3_PC4.png")
+```
+
+## identify DEGs by performing all biologically relevent pair-wise comparisons
+
+```{r}
+sampleTypes <- unique(mouse_ATAC_sampleMetaData$sampleType)
+
+sample_unique_info <- data.frame(sample = sampleTypes, comparisons1 = NA, comparisons2= NA)
+
+#create sample and control sets
+for (samp in sampleTypes){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 3
+  }
+  #check if digit 3
+  if (samp_info[3] == "3"){
+    comp_digits <- c(1, 5)
+  }
+  #check if digit 1
+  if (samp_info[3] == "5"){
+    comp_digits <- c(3)
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if phalanges
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+    digit_comp <- paste(samp_info[1], alt_region, samp_info[3], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], sep = "")
+  sample_unique_info$comparisons1[which(sample_unique_info$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp)))
+  sample_unique_info$comparisons2[which(sample_unique_info$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, sep = "|")
+}
+```
+
+## Use function to perform DESeq and return number of genes
+
+```{r}
+#add key to convert between my nomenclature and something less easy to misinterpret
+autopod_key <- data.frame(autopod_abrevs = c("FM1", "FM2", "FM3", "FM4", "FM5", 
+                     "FP1", "FP2", "FP3", "FP4", "FP5", 
+                     "HM1", "HM2", "HM3", "HM4", "HM5", 
+                     "HP1", "HP2", "HP3", "HP4", "HP5"), autopod_tissues = c("METATARSAL1", "METATARSAL2", "METATARSAL3", "METATARSAL4", "METATARSAL5", 
+                                    "FOOTPHALANGES1", "FOOTPHALANGES2", "FOOTPHALANGES3", "FOOTPHALANGES4", "FOOTPHALANGES5", 
+                                    "METACARPAL1", "METACARPAL2", "METACARPAL3", "METACARPAL4", "METACARPAL5", 
+                                    "HANDPHALANGES1", "HANDPHALANGES2", "HANDPHALANGES3", "HANDPHALANGES4", "HANDPHALANGES5"))
+ 
+#create dataframe to store results
+mouse_DARs <- data.frame()
+ 
+#iterate over each sample
+for (i in 1:length(sampleTypes)){
+   #find number of comparisons
+   comp_samples <- unlist(sample_unique_info$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, grep(paste(sample_unique_info$sample[i], comp_samples[c], sep = "|"), names(mouse_ATAC_peak_ct)))
+     good_data <- mouse_ATAC_peak_ct[,colsToKeep]
+     filteredMetaData <- mouse_ATAC_sampleMetaData %>% dplyr::filter(sampleType %in% c(sample_unique_info$sample[i], comp_samples[c]))
+     filteredMetaData$sampleType <- factor(filteredMetaData$sampleType, levels = c(sample_unique_info$sample[i], comp_samples[c]))
+     test_output <- runDESEQ2_df_no_annot(design_in = formula(~replicate + sampleType), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     #fix column names
+     names(test_output)[1] <- "peak"
+     test_output$tissue1 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])]
+     test_output$tissue2 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])]
+     mouse_DARs <- rbind(mouse_DARs, test_output)
+   }
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(mouse_DARs) %>% dplyr::filter(abs(log2FoldChange) > 0.58), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/All_Mouse_Bio_Pairwise_Autopod_DARs.tsv", delim = "\t")
+
+nrow(mouse_ATAC_peak_ct)
+length(unique(mouse_DARs$peak))
+```
+
+#now test for DAR modules
+```{r}
+#DARs per comparison
+mouse_DARs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/All_Mouse_Bio_Pairwise_Autopod_DARs.tsv", sep = "\t", header = T))
+
+#save as bed
+mouse_DARs %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+  distinct %>% 
+  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_mm10.bed", ncol = 3)
+
+
+#perform initial DESeq to get normalized counts
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#reduced <- formula(~limbtype)
+
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = mouse_ATAC_peak_ct, colData = mouse_ATAC_sampleMetaData, design = design, tidy = T)
+rsem.de <- DESeq(rsem.in)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+rsem.vst <- vst(rsem.de)
+mat <- assay(rsem.vst)
+mm <- model.matrix(~replicate, colData(rsem.vst))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst)$replicate)
+assay(rsem.vst) <- mat
+normalized_counts <- assay(rsem.vst)
+
+#filter by DARs
+DEG_normalized_counts <- normalized_counts[which(row.names(normalized_counts) %in% unique(mouse_DARs$peak)),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 40, by = 2))
+
+allowWGCNAThreads()
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df <- data.frame(
+  gene_id = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment = mouse_ATAC_sampleMetaData$sampleType
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+
+
+```
+
+## Plot output
+
+```{r}
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df %>% 
+  group_by(cluster) %>% 
+  summarize(peak_n = n()) 
+
+write_delim(module_df %>% 
+              dplyr::left_join(color_cluster_key) %>% 
+              dplyr::select(gene_id, cluster) %>% dplyr::rename(peak = gene_id) %>% arrange(cluster) ,
+            file = "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_clusters.tsv",
+            delim = "\t")
+            
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>%
+    dplyr::left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("mouse_DAR_cluster_", i, sep = ""), opt_text = paste(mME_temp$peak_n[i+1], " peaks", sep =""), center = T)
+
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_2.png") %>%
+  image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_4.png") %>%
+  image_ggplot()
+plt5 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_5.png") %>%
+  image_ggplot()
+plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_6.png") %>%
+  image_ggplot()
+plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_7.png") %>%
+  image_ggplot()
+plt8 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_8.png") %>%
+  image_ggplot()
+plt9 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_9.png") %>%
+  image_ggplot()
+plt10 <- image_read("~/Desktop/Autopod_Skeleton_Figures/mouse_DAR_cluster_10.png") %>%
+  image_ggplot()
+
+#generate and save plot
+mouse_DAR_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10,  nrow =3, ncol = 4, labels = 1:10, align="hv")
+ggsave(mouse_DAR_clusters_wgcna, device = "png", filename = "mouse_DAR_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10)
+
+```
+
+### perform GREAT enrichment
+
+```{r}
+module_df2 <- module_df %>% 
+  separate_wider_delim(gene_id, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end, cluster)
+
+for(i in unique(module_df2$cluster)){
+  module_df2 %>% dplyr::filter(cluster == i) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_mm10.bed", sep =""))
+}
+
+
+#create dfs to store results 
+great_df <- data.frame()
+
+for(i in unique(module_df2$cluster)){
+      module_great <- bed_GREAT_enrich(
+        bedfile = paste("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_mm10.bed", sep =""), genome = "mm10")
+      
+      #if GO enrichments, add label
+    if(nrow(module_great > 0)){
+      module_great$module <- paste("Module_", i, sep ="")
+    #otherwise, add a marker stating no results found
+    }else{
+      module_great <- data.frame(
+        ID = "NO GREAT ENRICHMENTS", 
+        name = NA,
+        Binom_Genome_Fraction = NA,
+        Binom_Expected = NA,
+        Binom_Observed_Region_Hits = NA,
+        Binom_Fold_Enrichment = NA,
+        Binom_Region_Set_Coverage = NA,
+        Binom_Raw_PValue = NA,
+        Binom_Adjp_BH = NA,
+        Hyper_Total_Genes = NA,
+        Hyper_Expected = NA,
+        Hyper_Observed_Gene_Hits = NA,
+        Hyper_Fold_Enrichment = NA,
+        Hyper_Gene_Set_Coverage = NA,
+        Hyper_Term_Gene_Coverage = NA,
+        Hyper_Raw_PValue = NA,
+        Hyper_Adjp_BH = NA,
+        Ontology = NA,
+        module = paste("Module_", i, sep ="")
+      )
+    }
+      #store results 
+      great_df <- rbind(great_df, module_great)
+      
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/Mouse_DAR_Modules_GREAT.tsv", delim = "\t")
+```
+
+##TF Analysis
+
+```{r}
+
+#load libraries for TF analysis
+library("monaLisa")
+library(TFBSTools)
+library(JASPAR2020)
+library(BSgenome.Mmusculus.UCSC.mm10)
+library(SummarizedExperiment)
+library(mia)
+
+
+#get pwm matrix for TFs
+mouse_pwms <- getMatrixSet(JASPAR2020,
+                           opts = list(matrixtype = "PWM",
+                                       species    = "10090"))
+
+#TF analysis function
+pairwise_TF_analysis_mouse <- function(bed1, 
+                                       bed2, 
+                                       ids = c("bed1", "bed2")
+){
+  #import bed files as rtracklayer
+  range1 <- rtracklayer::import(con = bed1, format = "bed")
+  range2 <- rtracklayer::import(con = bed2, format = "bed")
+  #extract human sequence
+  seqs1 <- getSeq(x = BSgenome.Mmusculus.UCSC.mm10, range1)
+  seqs2 <- getSeq(x = BSgenome.Mmusculus.UCSC.mm10, range2)
+  
+  #combine sequences into single object
+  comp_seqs <-  c(seqs1, seqs2)
+  bins <- rep(ids, c(length(seqs1), length(seqs2)))
+  bins <- factor(bins)
+  #perform motif enrichment
+  se <- calcBinnedMotifEnrR(seqs = comp_seqs, bins = bins,
+                            pwmL = mouse_pwms, BPPARAM = BiocParallel::MulticoreParam(4))
+  se_long <- merge(meltAssay(se, assay.type = "negLog10Padj", add_row_data = T, ) %>% 
+                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
+                     as.data.frame(), meltAssay(se, assay.type = "log2enr", add_row_data = T) %>% 
+                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
+                     as.data.frame()) %>% 
+    dplyr::filter(negLog10Padj > 4)
+  
+  return(se_long)
+}
+
+all_mouse_peaks_bed <- "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_multiinter_simple_mm10.bed"
+
+
+mouse_TF_df <- data.frame()
+
+for(i in 0:10){
+  mouse_result <- pairwise_TF_analysis_mouse(bed1 = paste("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_mm10.bed", sep =""), 
+                                             bed2 = all_mouse_peaks_bed, 
+                                             ids = c(paste("mouse_", i, sep = ""), "all_peaks"))
+  
+  mouse_TF_df <- rbind(mouse_TF_df, mouse_result)
+}
+
+mouse_TF_df %>% write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments.tsv")
+
+read.table("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments.tsv", header = T) %>% 
+  dplyr::filter(SampleID != "all_peaks") %>% 
+  write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments_cleaned.tsv")
+
+```
