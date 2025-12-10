@@ -194,7 +194,7 @@ do
 
 echo "Generating RSEM output file for ${sample}"
 
-rsem-calculate-expression --num-threads 36 --forward-prob 0 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Human_RNA/RSEM_Output/${sample}
+rsem-calculate-expression --num-threads 48  --forward-prob 0 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Human_RNA/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/hg38_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Human_RNA/RSEM_Output/${sample}
 
 done
 ```
@@ -303,11 +303,11 @@ cat ${file1R2} ${file2R2} ${file3R2} > /n/holyscratch01/capellini_lab/aokamoto/M
 
 echo "Removing adapters for ${sample} using NGmerge"
 
-NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample} -v -e 30 -n 36
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample} -v -e 30 -n 48
 
 echo "Removing mitochondrial DNA for ${sample} using sortmerna"
 
- ribodetector_cpu -t 36 \
+ ribodetector_cpu -t 48 \
   -l 100 \
   -i /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_1.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_2.fastq.gz \
   -e rrna \
@@ -318,7 +318,7 @@ echo "Removing mitochondrial DNA for ${sample} using sortmerna"
 echo "Aligning ${sample} to mm10 using STAR"
 
 STAR \
---runThreadN 36 \
+--runThreadN 48 \
 --quantMode TranscriptomeSAM \
 --genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/STAR_ensembl_GRCm39 \
 --readFilesCommand zcat \
@@ -341,7 +341,7 @@ do
 
 echo "Generating RSEM output file for ${sample}"
 
-rsem-calculate-expression --num-threads 36 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}
+rsem-calculate-expression --num-threads 48 --strand-specific --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}Aligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}
 
 done
 
@@ -443,11 +443,11 @@ cat ${file1R2} ${file2R2} ${file3R2} ${file4R2} ${file5R2} ${file6R2} ${file7R2}
 
 echo "Removing adapters for ${sample} using NGmerge"
 
-NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt -v -e 30 -n 36
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R1_Merged.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/${sample}_alt_R2_Merged.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt -v -e 30 -n 48
 
 echo "Removing mitochondrial DNA for ${sample} using sortmerna"
 
- ribodetector_cpu -t 36 \
+ ribodetector_cpu -t 48 \
   -l 100 \
   -i /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt_1.fastq.gz /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/Trimmed_Reads/${sample}_alt_2.fastq.gz \
   -e rrna \
@@ -458,7 +458,7 @@ echo "Removing mitochondrial DNA for ${sample} using sortmerna"
 echo "Aligning ${sample} to mm10 using STAR"
 
 STAR \
---runThreadN 36 \
+--runThreadN 48 \
 --quantMode TranscriptomeSAM \
 --genomeDir /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/STAR_ensembl_GRCm39 \
 --readFilesCommand zcat \
@@ -481,7 +481,7 @@ do
 
 echo "Generating RSEM output file for ${sample}"
 
-rsem-calculate-expression --num-threads 36 --forward-prob 0.5 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_altAligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}_alt
+rsem-calculate-expression --num-threads 48 --forward-prob 0.5 --paired-end --alignments /n/holyscratch01/capellini_lab/aokamoto/Mouse_RNA_LowDepth/STAR_output/${sample}_altAligned.toTranscriptome.out.bam /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus_RSEM_ensembl /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_RNA_LowDepth/RSEM_Output/${sample}_alt
 
 echo "Finished RSEM run for ${sample}"
 
