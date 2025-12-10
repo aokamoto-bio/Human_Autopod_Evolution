@@ -1,6 +1,6 @@
 ## File containing all custom functions used in analyzing human and mouse autopod data
 ## Alexander Okamoto
-## July 13, 2025
+## Last updated December 10, 2025
 
 #read in RSEM gene results counts and create a dataframe
 #filepath should be a string with the full path to the RSEM results (ending with ".genes.results")
