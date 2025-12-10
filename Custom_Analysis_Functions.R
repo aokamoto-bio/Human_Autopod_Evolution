@@ -75,6 +75,46 @@ runDESEQ2_df <- function(design_in, count_data, col_data, padj.cutoff = 0.05){
   return(rsem.de.res.df)
 } #end function
 
+#initialize function
+#design_in is the DESeq model input
+#this version is specific to mouse
+
+runDESEQ2_df_no_annot <- function(design_in, count_data, col_data, padj.cutoff = 0.05){
+  
+  #glm design
+  # Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+  
+  #build DESeqDataSet
+  rsem.in <- DESeqDataSetFromMatrix(countData = count_data, colData = col_data, design = design_in, tidy = T)
+  #pre-filter rows with 0 or 1 read
+  rsem.in <- rsem.in[ rowSums(counts(rsem.in)) >= 1, ]
+  rsem_cols <-as.data.frame(row.names(rsem.in))
+
+  #fix gene names in rsem.in
+  #don't have to do this--when deseq reads in gene names from rsem file it duplicates name of gene. Gets rid of second name. 
+  #rownames(rsem.in) <-  sapply(strsplit(c(rownames(rsem.in)), split = '_', fixed = TRUE), function(x) (x[1]))
+  
+  #calculate DGE likelihood ratio test
+  #LRT needs reduced. Just W t
+  
+  #, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+  rsem.de <- DESeq(rsem.in)
+  
+  #rsem.in variable is building the dataset 
+  #now model is in rsem.de
+  
+  #summarized experiment input
+  #can set alpha level at whatever
+  rsem.de.res <- results(rsem.de, alpha = 0.05)
+  #summary shows summary of results
+  summary(rsem.de.res)
+  
+  #This is a way to export a table of the differentially expressed genes, ordered by p-value
+  rsem.de.res.df <- rsem.de.res[order(rsem.de.res$padj),] %>% as.data.frame() %>% dplyr::filter(padj < padj.cutoff)
+  
+  return(rsem.de.res.df)
+} #end function                           
+
 plot_autopod_expression <- function(expr_df, file_name = "test_plot", opt_text = "", min_color_value = NA, max_color_value = NA, center = F, center_color_value = NA){
   #expr_df needs to be a dataframe with a column of tissue (in format HP1 for hand phalanges, digit I, HM for metacarpal) and a value column
   require(grid)
