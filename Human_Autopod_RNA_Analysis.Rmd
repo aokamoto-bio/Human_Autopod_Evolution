@@ -1,13 +1,13 @@
 ---
 title: "Human Autopod RNA Analysis"
 author: "Alexander Okamoto"
-date: "2025-05-27"
+date: "2025-12-10"
 output: html_document
 ---
 
 ##Set working directory
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini Lab/Human Autopod RNA/Human RSEM Output')
+knitr::opts_chunk$set(echo = TRUE, root.dir = '~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output CORRECTED/')
 ```
 
 ##load required packages
@@ -39,7 +39,7 @@ source("~/Desktop/Capellini_Lab/Weekly_Coding/RNA_Analysis_Functions.R")
 ```{r}
 
 #Determine the file names
-sampleNames <- read.table(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output/human_autopod_RNA_samples.txt", header = F)
+sampleNames <- read.table(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output CORRECTED/human_autopod_RNA_samples.txt", header = F)
 #sort sample names alphabetically 
 sampleNames <- sort(sampleNames$V1)
 
@@ -68,7 +68,7 @@ colnames(human_rna_read_counts) <- c("sample", "reads")
 sampleMetaData <- sampleMetaData %>% dplyr::left_join(human_rna_read_counts, by = 'sample')
 
 #load the counts data
-ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output/")
+ct <- read_in_counts(samplenames = sampleMetaData$sample, filepath = "~/Desktop/Capellini_Lab/Human Autopod RNA/Human RSEM Output CORRECTED/")
 
 #remove version number from gene_id so it will be compatible with biomart
 ct$gene_id = sapply(strsplit(ct$gene_id, ".", fixed=T), function(x) x[1])
@@ -349,6 +349,8 @@ human_DEGs2 <- rbind(human_DEGs2, dds_res_df_late) %>% dplyr::filter(padj < 0.05
 ## Get timepoint lists of DEGs
 
 ```{r}
+human_DEGs2 <- read_table(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs.tsv")
+
 #get timepoint information for each DEG comparison
 human_DEGs2$tissue1_tp <- str_sub(human_DEGs2$tissue1, start= -1)
 human_DEGs2$tissue2_tp <- str_sub(human_DEGs2$tissue2, start= -1)
@@ -366,6 +368,12 @@ human_DEGs_late <- human_DEGs2 %>% dplyr::filter(tissue1_tp == "L" & tissue2_tp 
 length(unique(human_DEGs_early$ensembl_gene_id))
 length(unique(human_DEGs_late$ensembl_gene_id))
 length(intersect(human_DEGs_early$ensembl_gene_id, human_DEGs_late$ensembl_gene_id))
+
+
+length(unique(human_DEGs2$ensembl_gene_id))
+human_DEGs2 %>% dplyr::filter(tissue1 %in% c("EARLY_GRADIENT", "LATE_GRADIENT")) %>% pull(ensembl_gene_id) %>% unique %>% length()
+human_DEGs2 %>% dplyr::filter(! tissue1 %in% c("EARLY_GRADIENT", "LATE_GRADIENT")) %>% pull(ensembl_gene_id) %>% unique %>% length()
+
 ```
 
 ## Module Analysis Using WGNCA
@@ -546,9 +554,13 @@ plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_1
   image_ggplot()
 plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_2.png") %>%
   image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_RNA_cluster_4.png") %>%
+  image_ggplot()
 
 #generate and save plot
-human_RNA_clusters_wgcna <- plot_grid(plt1, plt2,  nrow =1, ncol = 2, labels = 1:2, align="hv")
+human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4,  nrow =2, ncol = 2, labels = 1:4, align="hv")
 ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_early_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
 ```
 
@@ -726,9 +738,29 @@ plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_3.
   image_ggplot()
 plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_4.png") %>%
   image_ggplot()
+plt5 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_5.png") %>%
+  image_ggplot()
+plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_6.png") %>%
+  image_ggplot()
+plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_7.png") %>%
+  image_ggplot()
+plt8 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_8.png") %>%
+  image_ggplot()
+plt9 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_9.png") %>%
+  image_ggplot()
+plt10 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_10.png") %>%
+  image_ggplot()
+plt11 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_11.png") %>%
+  image_ggplot()
+plt12 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_12.png") %>%
+  image_ggplot()
+plt13 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_13.png") %>%
+  image_ggplot()
+plt14 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_14.png") %>%
+  image_ggplot()
 
 #generate and save plot
-human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4,  nrow =2, ncol = 3, labels = 1:4, align="hv")
+human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, plt13, plt14, nrow =3, ncol = 5, labels = 1:14, align="hv")
 ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_late_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
 ```
 
@@ -797,6 +829,8 @@ text(sft$fitIndices[, 1],
 
 #choose power as minimum value to produce Rsq greater than 0.9
 picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+#picking first value below 0.9 before R.sq declines
+picked_power = 8
 temp_cor <- cor       
 cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
 netwk <- blockwiseModules(input_mat,                # <= input here
@@ -856,6 +890,14 @@ cluster_go_analysis(cluster_results = module_df_late,
 
 #read in enrichments 
 human_GO_clusters_late <- unique(read.delim(file= "~/Desktop/Capellini_Lab/Human Autopod RNA/Human_RNA_Clusters_Late_GO_Enrichments.csv", sep = "\t", header = T))
+
+#create normalized counts for function
+norm_counts <- normalized_counts %>% as.data.frame() %>% mutate(ensembl_gene_id = row.names(normalized_counts)) %>% pivot_longer(!ensembl_gene_id, names_to = "name", values_to = "count") %>% right_join(y = annot[,1:2]) 
+norm_counts$name <- gsub(pattern = "E", replacement = "", x = norm_counts$name)
+norm_counts$name <- gsub(pattern = "L", replacement = "", x = norm_counts$name)
+
+write_tsv(norm_counts, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_normalized_counts.tsv")
+
 ```
 
 #repeat key steps for just early samples 1,3,5 to compare with mouse
@@ -979,7 +1021,7 @@ human_DEGs1352 <- rbind(human_DEGs135, dds_res_df) %>% dplyr::filter(padj < 0.05
 
 write_delim(x = as.data.frame(human_DEGs1352), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_early.tsv", delim = "\t")
 
-human_DEGs135 <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_early.tsv", sep = "\t", header = T))
+human_DEGs135 <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs135_late.tsv", sep = "\t", header = T))
 
 length(intersect(human_DEGs_early$ensembl_gene_id, human_DEGs1352$ensembl_gene_id))
 ```
@@ -1110,18 +1152,18 @@ length(unique(human_modules$cluster))
 length(unique(human_modules_early$cluster))
 length(unique(human_modules_late$cluster))
 
-for (i in 1:9){
+for (i in 1:12){
   shared_genes <- length(intersect(human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == 5)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
 }
 
-for (i in 1:9){
+for (i in 1:12){
   shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 2)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
 }
 
-for (i in 1:4){
-  shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 2)], human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == i)]))
+for (i in 1:12){
+  shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 4)], human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == i)]))
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
 }
 
@@ -1139,10 +1181,12 @@ length(intersect(human_DEGs2$ensembl_gene_id, mouse_to_human_gene(mouse_DEGs$ens
 ##timepoint analysis
 
 ```{r}
-timepoint_DEGs <- runDESEQ2_df_hs(design_in = formula(~timepoint), count_data = ct, col_data =  sampleMetaData) %>% dplyr::filter(abs(log2FoldChange) > 0.58)
+timepoint_DEGs <- runDESEQ2_df_hs(design_in = formula(~timepoint), count_data = ct, col_data =  sampleMetaData) %>% dplyr::filter(abs(log2FoldChange) > 0.58) %>% dplyr::filter(padj < 0.05)
 
 length(which(timepoint_DEGs$log2FoldChange > 0))
 length(which(timepoint_DEGs$log2FoldChange < 0))
+timepoint_DEGs$timepoint<- "EARLY"
+timepoint_DEGs$timepoint[which(timepoint_DEGs$log2FoldChange > 0)] <- "LATE"
 
 #timepoint_DEGs <- read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs.tsv", sep = "\t", header = T)
 write.table(x = timepoint_DEGs , file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs.tsv", sep = "\t", col.names = T)
@@ -1151,7 +1195,7 @@ late_GO <- simple_go_analysis(timepoint_DEGs$rsem_annot.hgnc_symbol[which(timepo
 late_GO$timepoint <- "LATE"
 
 early_GO <- simple_go_analysis(timepoint_DEGs$rsem_annot.hgnc_symbol[which(timepoint_DEGs$log2FoldChange < 0)])
-early_GO$timepoint <- "Early"
+early_GO$timepoint <- "EARLY"
 
 timepoint_GO <- rbind(early_GO, late_GO)
 
