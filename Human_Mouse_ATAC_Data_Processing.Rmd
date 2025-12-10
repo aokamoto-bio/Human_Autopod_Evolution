@@ -1,7 +1,7 @@
 ---
 title: "Human_Mouse_ATAC_Data_Cluster_Processing"
 author: "Alexander Okamoto"
-date: "2025-5-26"
+date: "2025-12-10"
 output: html_document
 ---
 
@@ -127,14 +127,14 @@ fi
 
 echo "Trimming adaptors using NGmerge"
 
-NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 36
+NGmerge -a -1 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 /n/holyscratch01/capellini_lab/aokamoto/Human_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 48
 
 echo "Aligning ${sample} to UCSC hg38 genome."
 
 bowtie2 \
 -X 2000 \
 -t \
--p 36 \
+-p 48 \
 -x /n/capellini_lab/users/aokamoto/Autopod_Project/HumanReference/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome \
 --very-sensitive \
 -1 /n/holyscratch01/capellini_lab/aokamoto/Human_Trimmed_Reads/${rep_id}_${sample}_trimmed_1.fastq.gz \
@@ -265,6 +265,28 @@ cut -f 1-3 /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopo
 done
 ```
 
+##for generating peakCounts
+## uses merged IDR peaks file: /human_all_merge_IDR_0.05_brain_filtered.bed
+
+```{bash}}
+
+/n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered.bed 
+
+#reformat bed
+awk 'BEGIN {OFS="\t"} {print $1, $2, $3, $1":"$2"-"$3}' /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered.bed > /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered_2.bed 
+
+#generate saf file 
+awk 'BEGIN{FS=OFS="\t"; print "GeneID\tChr\tStart\tEnd\tStrand"}{print $4, $1, $2+1, $3, "."}' /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered_2.bed  > /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered.saf
+
+#get feature counts
+/n/capellini_lab/users/aokamoto/Software/subread-2.0.2-Linux-x86_64/bin/featureCounts -a /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC/IDR_called_peaks/human_all_merge_IDR_0.05_brain_filtered.saf -F SAF -T 20 -t bam -p -o human_ATAC_peaks_countMatrix.txt $SCRATCH/capellini_lab/Lab/aokamoto/Human_noMT/*.bam
+28723_HP2.noMT.bam
+
+#save bam files to more permanent directory
+cp $SCRATCH/capellini_lab/Lab/aokamoto/Human_noMT/*.bam /n/capellini_lab/users/aokamoto/Autopod_Project/Human_ATAC
+```
+
+
 ## MOUSE
 
 Mouse ATAC-seq sequencing data was processed similarly, except using the mouse mm10 genome and Mac3 software due an update to the software ocurring during the course of this research. The script is below:
@@ -351,14 +373,14 @@ elif [[ -f ${file1} && -f ${file2} ]]; then
   echo "${file1} and ${file2} found."
 fi
 
-/n/capellini_lab/users/aokamoto/Software/NGmerge-master/NGmerge -a -1 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 36
+/n/capellini_lab/users/aokamoto/Software/NGmerge-master/NGmerge -a -1 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R1.fastq.gz -2 $SCRATCH/capellini_lab/Lab/mouse_cat_ATAC_files/${rep_id}_${sample}_R2.fastq.gz -o $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed -v -e 30 -n 48
 
 echo "Aligning ${sample} to UCSC mm10 genome."
 
 bowtie2 \
 -X 2000 \
 -t \
--p 36 \
+-p 48 \
 -x /n/capellini_lab/users/aokamoto/Autopod_Project/MouseReference/Mus_musculus/UCSC/mm10/Sequence/Bowtie2Index/genome \
 --very-sensitive \
 -1 $SCRATCH/capellini_lab/Lab/Mouse_Trimmed_Reads/${rep_id}_${sample}_trimmed_1.fastq.gz \
@@ -445,7 +467,7 @@ echo "Merging replicates for  ${sample} using samtools"
 
 samtools merge "$SCRATCH/capellini_lab/Lab/Mouse_noMT/${sample}_pooled.bam" ${inbam1} ${inbam2} ${inbam3}
 
-echo "Calling peaks for ${sample} using MACS2"
+echo "Calling peaks for ${sample} using MACS3"
 
 macs3 callpeak \
 -t "$SCRATCH/capellini_lab/Lab/Mouse_noMT/${sample}_pooled.bam" \
@@ -486,5 +508,24 @@ do
 cut -f 1-4 Brain_Filtered/mouse_${sample}_IDR_0.05_brain_filtered.narrowPeak > Brain_Filtered/mouse_${sample}_IDR_0.05_brain_filtered.bed
 
 done
+```
+
+##for generating peakCounts
+
+```{bash}
+#create merged bed file
+cat mouse_HM1_IDR_0.05_brain_filtered_sorted_mm10.bed mouse_FM1_IDR_0.05_brain_filtered_sorted_mm10.bed	 mouse_FP1_IDR_0.05_brain_filtered_sorted_mm10.bed	 mouse_HM3_IDR_0.05_brain_filtered_sorted_mm10.bed mouse_HM5_IDR_0.05_brain_filtered_sorted_mm10.bed mouse_FM3_IDR_0.05_brain_filtered_sorted_mm10.bed		mouse_FP3_IDR_0.05_brain_filtered_sorted_mm10.bed		mouse_HP1_IDR_0.05_brain_filtered_sorted_mm10.bed mouse_HP3_IDR_0.05_brain_filtered_sorted_mm10.bed mouse_FM5_IDR_0.05_brain_filtered_sorted_mm10.bed		mouse_FP5_IDR_0.05_brain_filtered_sorted_mm10.bed		mouse_HP5_IDR_0.05_brain_filtered_sorted_mm10.bed | sort -k 1,1 -k2,2n | bedtools merge -i stdin > mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10.bed
+
+#reformat bed file
+awk 'BEGIN {OFS="\t"} {print $0, $1":"$2"-"$3}' mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10.bed > mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10_2.bed
+
+#create saf file
+awk 'BEGIN{FS=OFS="\t"; print "GeneID\tChr\tStart\tEnd\tStrand"}{print $4, $1, $2+1, $3, "."}' mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10_2.bed > mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10.saf
+
+#get feature counts  
+/n/capellini_lab/users/aokamoto/Software/subread-2.0.2-Linux-x86_64/bin/featureCounts -a /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_ATAC/IDR_called_peaks/mouse_all_merged_IDR_0.05_brain_filtered_sorted_mm10.saf -F SAF -T 20 -t bam -p -o mouse_ATAC_peaks_countMatrix.txt $SCRATCH/capellini_lab/Lab/Mouse_noMT/*.bam
+
+#save results to a more permanent direcotry
+cp $SCRATCH/capellini_lab/Lab/Mouse_noMT/* /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_ATAC
 ```
 
