@@ -1,0 +1,1028 @@
+---
+title: "Human ATAC Data Analysis"
+author: "Alexander Okamoto"
+date: "2025-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Load packages
+
+```{r}
+library(ChIPQC)
+library(rtracklayer)
+library(DT)
+library(tidyverse)
+library(soGGi)
+library(GenomicRanges)
+
+library(readxl) #for loading excel files
+library(stringi) #for concatenating strings
+
+#load in plotting packages
+library(reshape2)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(cowplot)
+library(DESeq2)
+```
+
+#load in the new counts data
+
+```{r}
+#load read count information
+human_ATAC_peak_counts <- read.delim(file = "~/Desktop/Capellini_Lab/Human_ATAC/human_ATAC_peaks_countMatrix.txt", header = T)
+#clean up column names
+colnames(human_ATAC_peak_counts) <- gsub(
+  pattern = "X.n.netscratch.capellini_lab.Lab.aokamoto.Human_noMT.", 
+  replacement = "", x = colnames(human_ATAC_peak_counts) )
+colnames(human_ATAC_peak_counts) <- gsub(
+  pattern = ".noMT.bam", 
+  replacement = "", x = colnames(human_ATAC_peak_counts) )
+colnames(human_ATAC_peak_counts)[1] <- "peak"
+
+
+sample_info <- read.table("~/Desktop/Capellini_Lab/Human_ATAC/ATAC_files2.txt", header=TRUE)
+sample_info$limbtype <- as.factor(sample_info$limbtype)
+sample_info$replicate <- as.factor(sample_info$H_ID)
+
+human_ATAC_peak_ct <- human_ATAC_peak_counts[,c(1, 7:146)]
+
+#remove sample with too few reads
+human_ATAC_peak_ct$`28597_FP5` <- NULL
+sample_info <- sample_info %>% dplyr::filter(sample != "28597_FP5")
+```
+
+## Run DESeq
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#reduced <- formula(~limbtype)
+
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = human_ATAC_peak_ct, colData = sample_info, design = design, tidy = T)
+
+#calculate DGE likelihood ratio test
+#LRT needs reduced. Just W t
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+
+#perform variance standardizing transformation
+rsem.vst <- vst(rsem.de)
+mat <- assay(rsem.vst)
+mm <- model.matrix(~replicate, colData(rsem.vst))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst)$replicate)
+assay(rsem.vst) <- mat
+
+# perform a PCA on the data in assay(x) for the selected genes
+human_sample_pca <- prcomp(t(assay(rsem.vst)))
+
+# Variance explained by PCs
+human_pc_eigenvalues <- human_sample_pca$sdev^2
+
+# create a "tibble" manually with 
+# a variable indicating the PC number
+# and a variable with the variances
+human_pc_eigenvalues <- tibble(PC = factor(1:length(human_pc_eigenvalues)), 
+                         variance = human_pc_eigenvalues) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+#visualize
+human_pc_eigenvalues %>% 
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction variance explained")
+
+# The PC scores are stored in the "x" value of the prcomp object
+human_pc_scores <- human_sample_pca$x %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+human_pc_scores_full <- merge(x = human_pc_scores, by = 'sample', y = sample_info)
+
+human_atac_pca <- human_pc_scores_full %>% 
+  # create the plot
+  ggplot(aes(x = PC1, y = PC2, color = tissue_type, shape = digit)) +
+  geom_point() + labs(x = paste0("PC1 (", round(human_pc_eigenvalues$pct[1], 1), "%)"), y = paste0("PC2 (", round(human_pc_eigenvalues$pct[2], 1), "%)"), color = "Limb Type", shape = "Tissue", title = "human Autopod ATAC PCA") + theme(plot.title = element_text(hjust = 0.5))
+
+human_atac_pca
+
+ggsave(plot = human_atac_pca, width = 5, height = 3, dpi = 300, filename = "human_atac_PCA_plot.png")
+
+human_atac_pca_2 <- human_pc_scores_full %>% 
+  # create the plot
+  ggplot(aes(x = PC3, y = PC4, color = tissue_type, shape = digit)) +
+  geom_point() + labs(x = paste0("PC3 (", round(human_pc_eigenvalues$pct[3], 2), "%)"), y = paste0("PC4 (", round(human_pc_eigenvalues$pct[4], 2), "%)"), color = "Limb Type", shape = "Tissue", title = "human Autopod ATAC PCA") + theme(plot.title = element_text(hjust = 0.5))
+
+human_atac_pca_2
+
+ggsave(plot = human_atac_pca_2, width = 5, height = 3, dpi = 300, filename = "human_atac_PCA_plot_PC3_PC4.png")
+```
+
+## Determine pair-wise comparisons
+
+```{r}
+## now determine the specific pairwise comparisons to perform (i.e. the most biologically meaningful DESeq runs)
+#I am using a schema to minimize confounders by only changing a single variable (either tissue location, either anteriorly/posteriorly or proximally/distally, across limb type, or across timepoint).
+
+#list sample types
+sampleTypes <- c(paste(unique(sample_info$tissue), "E", sep = ""), paste(unique(sample_info$tissue), "L", sep = ""))
+
+#create dataframe to store results
+sample_unique_info <- data.frame(sample = sampleTypes, comparisons1 = NA, comparisons2= NA)
+
+#create sample and control sets
+for (samp in sampleTypes){
+  comp_digits <- list()
+  alt_region <- "Unknown"
+  digit_comp <- "Unknown"
+  neighbors <- "Unknown"
+  samp_info <-unlist(strsplit(samp, ""))
+  #check if digit 1
+  if (samp_info[3] == "1"){
+    comp_digits <- 2
+  }
+  #check if digit >1, <5
+  if (samp_info[3] > 1 && samp_info[3] < 5){
+    comp_digits <- c(as.numeric(samp_info[3]) - 1,as.numeric(samp_info[3]) + 1)
+  }
+  #check if digit 5
+  if (samp_info[3] == "5"){
+    comp_digits <- 4
+  }
+  #Get other region
+  #check if metapodial
+  if (samp_info[2] == "M"){
+    alt_region <- "P"
+  }
+  #check if phalanges
+  if (samp_info[2] == "P"){
+    alt_region <- "M"
+  }
+  #check if hand (forelimb)
+  if (samp_info[1] == "H"){
+    alt_limb <- "F"
+  }
+  #check if food (hind limb)
+  if (samp_info[1] == "F"){
+    alt_limb <- "H"
+  }
+  #check if early stage
+  if (samp_info[4] == "E"){
+    alt_stage <- "L"
+  }
+  #check if late stage
+  if (samp_info[4] == "L"){
+    alt_stage <- "E"
+  }
+    digit_comp <- paste(samp_info[1], alt_region, samp_info[3], samp_info[4], sep = "")
+    neighbors <- list()
+    for (n in 1:length(comp_digits)){
+      neighbors <- append(neighbors, paste(samp_info[1], samp_info[2], comp_digits[n], samp_info[4], sep = ""))
+    }
+  neighbors2 <- paste(neighbors, collapse ="|")
+  limb_comp <- paste(alt_limb, samp_info[2], samp_info[3], samp_info[4], sep = "")
+  stage_comp <- paste(samp_info[1], samp_info[2], samp_info[3], alt_stage, sep = "")
+  sample_unique_info$comparisons1[which(sample_unique_info$sample == samp) ] <- list(as.list(c(neighbors, digit_comp, limb_comp, stage_comp)))
+  sample_unique_info$comparisons2[which(sample_unique_info$sample == samp) ] <- paste(samp, neighbors2, digit_comp, limb_comp, stage_comp, sep = "|")
+}
+```
+
+## Create a function to perform DESeq and return number of genes
+
+```{r}
+#initialize function
+  #design_in is the DESeq model input
+
+runDESEQ2_df_hs_atac <- function(design_in, count_data, col_data, padj.cutoff = 0.05){
+
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+  
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = count_data, colData = col_data, design = design_in, tidy = T)
+#pre-filter rows with 0 or 1 read
+rsem.in <- rsem.in[ rowSums(counts(rsem.in)) >= 1, ]
+rsem.de <- DESeq(rsem.in)
+
+#rsem.in variable is building the dataset 
+#now model is in rsem.de
+
+#summarized experiment input
+#can set alpha level at whatever
+rsem.de.res <- results(rsem.de, alpha = 0.05)
+
+#summary shows summary of results
+summary(rsem.de.res)
+
+#This is a way to export a table of the differentially expressed genes, ordered by p-value
+rsem.de.res.df <- rsem.de.res[order(rsem.de.res$padj),] %>% as.data.frame() %>% dplyr::filter(padj < padj.cutoff)
+
+return(rsem.de.res.df)
+} #end function
+```
+
+
+```{r}
+
+#add key to convert between my nomenclature and something less easy to misinterpret
+autopod_key_notp <- data.frame(autopod_abrevs = c("FM1", "FM2", "FM3", "FM4", "FM5", 
+                    "FP1", "FP2", "FP3", "FP4", "FP5", 
+                    "HM1", "HM2", "HM3", "HM4", "HM5", 
+                    "HP1", "HP2", "HP3", "HP4", "HP5"), autopod_tissues = c("METATARSAL1", "METATARSAL2", "METATARSAL3", "METATARSAL4", "METATARSAL5", 
+                                   "FOOTPHALANGES1", "FOOTPHALANGES2", "FOOTPHALANGES3", "FOOTPHALANGES4", "FOOTPHALANGES5", 
+                                   "METACARPAL1", "METACARPAL2", "METACARPAL3", "METACARPAL4", "METACARPAL5", 
+                                   "HANDPHALANGES1", "HANDPHALANGES2", "HANDPHALANGES3", "HANDPHALANGES4", "HANDPHALANGES5"))
+autopod_key_early <- autopod_key_notp 
+autopod_key_late <- autopod_key_notp 
+autopod_key_early$autopod_abrevs <- paste(autopod_key_early$autopod_abrevs, "E", sep = "")
+autopod_key_late$autopod_abrevs <- paste(autopod_key_late$autopod_abrevs, "L", sep = "")
+autopod_key_early$autopod_tissues <- paste(autopod_key_early$autopod_tissues, "E", sep = "")
+autopod_key_late$autopod_tissues <- paste(autopod_key_late$autopod_tissues, "L", sep = "")
+  
+autopod_key <- rbind(autopod_key_early, autopod_key_late)
+
+
+names(human_ATAC_peak_ct)[which(names(human_ATAC_peak_ct) %in% sample_info$sample[which(sample_info$timepoint == "Late")])] <- paste(names(human_ATAC_peak_ct)[which(names(human_ATAC_peak_ct) %in% sample_info$sample[which(sample_info$timepoint == "Late")])], "L", sep = "")
+names(human_ATAC_peak_ct)[which(names(human_ATAC_peak_ct) %in% sample_info$sample[which(sample_info$timepoint == "Early")])] <- paste(names(human_ATAC_peak_ct)[which(names(human_ATAC_peak_ct) %in% sample_info$sample[which(sample_info$timepoint == "Early")])], "E", sep = "")
+
+#add column to sample metadata
+sample_info$sampleTypeTP <- NA
+sample_info$sampleTypeTP[which(sample_info$timepoint == "Late")] <- paste(sample_info$tissue[which(sample_info$timepoint == "Late")], "L", sep = "")
+sample_info$sampleTypeTP[which(sample_info$timepoint == "Early")] <- paste(sample_info$tissue[which(sample_info$timepoint == "Early")], "E", sep = "")
+sample_info$sampleTypeTP<- factor(sample_info$sampleTypeTP)
+rownames(sample_info)[which(sample_info$timepoint == "Late")] <- paste(sample_info$sample[which(sample_info$timepoint == "Late")], "L", sep = "")
+rownames(sample_info)[which(sample_info$timepoint == "Early")] <- paste(sample_info$sample[which(sample_info$timepoint == "Early")], "E", sep = "")
+
+#modify ct column names to be compatible
+for(n in 2:length(names(human_ATAC_peak_ct)))
+{
+  name_pos <-  grep(pattern = names(human_ATAC_peak_ct)[n], sample_info$sampleTypeTP)
+  #print(names(human_ATAC_peak_ct)[n]) #to check if correct
+  #print(rownames(sample_info)[name_pos]) #to check if correct
+  names(human_ATAC_peak_ct)[n] <- rownames(sample_info)[name_pos]
+}
+
+
+# #create dataframe to store results
+ human_DARs <- data.frame()
+#
+ #iterate over each sample
+ for (i in 1:length(sampleTypes)){
+   #find number of
+   comp_samples <- unlist(sample_unique_info$comparisons1[i])
+   for(c in 1:length(comp_samples)){
+     #filter data and metadata
+     colsToKeep <- c(1, pattern = grep(paste(sample_unique_info$sample[i], comp_samples[c], sep = "|"), names(human_ATAC_peak_ct)))
+     good_data <- human_ATAC_peak_ct[,colsToKeep]
+     filteredMetaData <- sample_info %>% dplyr::filter(sampleTypeTP %in% c(sample_unique_info$sample[i], comp_samples[c]))
+filteredMetaData$sampleTypeTP <- factor(filteredMetaData$sampleTypeTP, levels = c(sample_unique_info$sample[i], comp_samples[c]))
+      # Get the indices for reordering
+      reorder_indices <- match(colnames(good_data)[-1], rownames(filteredMetaData))
+
+      # 
+      filteredMetaData <- filteredMetaData[reorder_indices, ]
+     #check if same all same timepoint
+     if(length(names(good_data[-1])) ==  length(grep(x = names(good_data[-1]), pattern = "L"))){
+     test_output <- runDESEQ2_df_hs_atac(design_in = formula(~replicate + sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     }else{
+       test_output <- runDESEQ2_df_hs_atac(design_in = formula(~sampleTypeTP), count_data = good_data, col_data = filteredMetaData) %>% setDT(keep.rownames = T)
+     }
+     #fix column names
+     names(test_output)[1] <- "peak"
+     test_output$tissue1 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])]
+     test_output$tissue2 <- autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])]
+     if(nrow(test_output) > 0){
+     human_DARs <- rbind(human_DARs, test_output)
+     }
+     #note if no DARs identified
+     if(nrow(test_output) == 0){
+     test_output <- data.frame(peak = "No DARs found",  baseMean = NA, log2FoldChange = NA, lfcSE = NA, stat = NA, pvalue= NA, padj = NA, tissue1=autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == sample_unique_info$sample[i])], tissue2= autopod_key$autopod_tissues[which(autopod_key$autopod_abrevs == comp_samples[c])])
+     human_DEGs <- rbind(human_DARs, test_output)
+     }
+   }
+ }
+
+ write_delim(x = as.data.frame(human_DARs) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/All_Human_Bio_Pairwise_Autopod_DARs.tsv", delim = "\t")
+```
+
+## Get timepoint lists of DEGs
+```{r}
+human_DARs <- read.delim(file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/All_Human_Bio_Pairwise_Autopod_DARs.tsv", sep = "\t", header = T)
+
+human_DARs %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+  distinct() %>% 
+  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_DARs_hg38.bed", ncol = 3)
+
+
+#get timepoint information for each DAR comparison
+human_DARs$tissue1_tp <- str_sub(human_DARs$tissue1, start= -1)
+human_DARs$tissue2_tp <- str_sub(human_DARs$tissue2, start= -1)
+
+
+#subset the DARs
+human_DARs_early <- human_DARs %>% dplyr::filter(tissue1_tp == "E" & tissue2_tp == "E")
+human_DARs_late <- human_DARs %>% dplyr::filter(tissue1_tp == "L" & tissue2_tp == "L")
+
+#get counts
+length(unique(human_DARs_early$peak))
+length(unique(human_DARs_late$peak))
+length(intersect(human_DARs_early$peak, human_DARs_late$peak))
+
+#make subsets for subsequent analysis
+#subset the count data
+colnames_clean <- gsub(pattern = "E", replacement = "", colnames(human_ATAC_peak_ct))
+colnames_clean <- gsub(pattern = "L", replacement = "", colnames_clean)
+
+#early
+ct_early <- human_ATAC_peak_ct[, c(1, which(colnames_clean %in% sample_info$sample[which(sample_info$timepoint == "Early")]))] %>% as.data.frame()
+#pre-filter rows with 0 or 1 read
+ct_early <- ct_early[rowSums(ct_early[,-1]) > 1,]
+
+#late
+ct_late <- human_ATAC_peak_ct[,c(1, which(colnames_clean %in% sample_info$sample[which(sample_info$timepoint == "Late")]))]
+#pre-filter rows with 0 or 1 read
+ct_late <- ct_late[rowSums(ct_late[-1]) > 1,]
+```
+
+## Module Analysis Using WGNCA
+I used this tutoriaL: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
+
+#rerun a DEGseq to get vst transformed data
+#forelimb vs hind limb
+#early
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#build DESeqDataSet
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = ct_early, colData = sample_info %>% dplyr::filter(timepoint == "Early"), design = design, tidy = T)
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+
+#plots related to dispersion, built in function to DESEQ
+rsem.vst_early <- vst(rsem.de)
+mat <- assay(rsem.vst_early)
+mm <- model.matrix(~replicate, colData(rsem.vst_early))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst_early)$replicate)
+assay(rsem.vst_early) <- mat
+
+normalized_counts_early <- assay(rsem.vst_early)
+
+#filter by DARs
+human_DARs_early_list <- unique(human_DARs_early$peak)
+DAR_normalized_counts_early <- normalized_counts_early[which(row.names(normalized_counts_early) %in% human_DARs_early_list),]
+
+#library(WGCNA)
+input_mat = t(DAR_normalized_counts_early)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df_early <- data.frame(
+  peak = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment <- sample_info %>% dplyr::filter(timepoint == "Early") %>% pull(tissue)
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df_early %>% 
+  group_by(cluster) %>% 
+  summarize(peak_n = n()) 
+
+write_delim(module_df_early %>% dplyr::left_join(color_cluster_key) %>% 
+  dplyr::select(peak, cluster) %>% dplyr::arrange(cluster),
+            file = "~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_modules.tsv",
+            delim = "\t")
+
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>% 
+    dplyr::left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("human_early_DAR_cluster_", i, sep = ""), opt_text = paste(mME_temp$peak_n[i+1], " peaks", sep =""),
+                       center =T 
+                        )
+  
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_2.png") %>%
+  image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_4.png") %>%
+  image_ggplot()
+plt5 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_5.png") %>%
+  image_ggplot()
+plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_6.png") %>%
+  image_ggplot()
+plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_7.png") %>%
+  image_ggplot()
+
+#generate and save plot
+human_DAR_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, nrow =2, ncol = 4, labels = 1:7, align="hv")
+ggsave(human_DAR_clusters_wgcna, device = "png", filename = "human_early_DAR_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
+```
+
+#late
+
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = ct_late, colData = sample_info %>% dplyr::filter(timepoint == "Late"), design = design, tidy = T)
+
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+
+#plots related to dispersion, built in function to DESEQ
+rsem.vst_late <- vst(rsem.de)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+mat <- assay(rsem.vst_late)
+mm <- model.matrix(~replicate, colData(rsem.vst_late))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst_late)$replicate)
+assay(rsem.vst_late) <- mat
+normalized_counts_late <- assay(rsem.vst_late)
+
+#filter by DEGs
+human_DARs_late_list <- unique(human_DARs_late$peak)
+DEG_normalized_counts_late <- normalized_counts_late[which(row.names(normalized_counts_late) %in% human_DARs_late$peak),]
+
+#library(WGCNA)
+input_mat = t(DEG_normalized_counts_late)
+
+# Choose a set of soft-thresholding powers
+powers = c(c(1:10), seq(from = 12, to = 30, by = 2))
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df_late <- data.frame(
+  peak = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment <- sample_info %>% dplyr::filter(timepoint == "Late") %>% pull(tissue)
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+  
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df_late %>% 
+  group_by(cluster) %>% 
+  summarize(peak_n = n()) 
+
+write_delim(module_df_late %>% dplyr::left_join(color_cluster_key) %>% 
+  dplyr::select(peak, cluster) %>% arrange(cluster),
+            file = "~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_modules.tsv",
+            delim = "\t")
+
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>% 
+    dplyr::left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("human_late_DAR_cluster_", i, sep = ""), opt_text = paste(mME_temp$peak_n[i+1], " peaks", sep =""),
+                        center =T
+                        )
+}
+
+plt0 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_0.png") %>%
+  image_ggplot()
+plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_1.png") %>%
+  image_ggplot()
+plt2 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_2.png") %>%
+  image_ggplot()
+plt3 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_3.png") %>%
+  image_ggplot()
+plt4 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_4.png") %>%
+  image_ggplot()
+plt5 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_5.png") %>%
+  image_ggplot()
+plt6 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_6.png") %>%
+  image_ggplot()
+plt7 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_DAR_cluster_7.png") %>%
+  image_ggplot()
+
+#generate and save plot
+human_DAR_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, nrow =2, ncol = 4, labels = 1:7, align="hv")
+ggsave(human_DAR_clusters_wgcna, device = "png", filename = "human_late_DAR_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
+```
+
+### perform GREAT enrichment
+```{r}
+module_df_early2 <- module_df_early %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end, cluster)
+
+for(i in unique(module_df_early2$cluster)){
+  module_df_early2 %>% dplyr::filter(cluster == i) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_module_", i, "_hg38.bed", sep =""))
+}
+
+#create dfs to store results 
+great_df <- data.frame()
+
+for(i in unique(module_df_early2$cluster)){
+      module_great <- bed_GREAT_enrich(
+        bedfile = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_module_", i, "_hg38.bed", sep =""), genome = "hg38")
+      
+      #if GO enrichments, add label
+    if(nrow(module_great > 0)){
+      module_great$module <- paste("Module_", i, sep ="")
+    #otherwise, add a marker stating no results found
+    }else{
+      module_great <- data.frame(
+        ID = "NO GREAT ENRICHMENTS", 
+        name = NA,
+        Binom_Genome_Fraction = NA,
+        Binom_Expected = NA,
+        Binom_Observed_Region_Hits = NA,
+        Binom_Fold_Enrichment = NA,
+        Binom_Region_Set_Coverage = NA,
+        Binom_Raw_PValue = NA,
+        Binom_Adjp_BH = NA,
+        Hyper_Total_Genes = NA,
+        Hyper_Expected = NA,
+        Hyper_Observed_Gene_Hits = NA,
+        Hyper_Fold_Enrichment = NA,
+        Hyper_Gene_Set_Coverage = NA,
+        Hyper_Term_Gene_Coverage = NA,
+        Hyper_Raw_PValue = NA,
+        Hyper_Adjp_BH = NA,
+        Ontology = NA,
+        module = paste("Module_", i, sep ="")
+      )
+    }
+      #store results 
+      great_df <- rbind(great_df, module_great)
+      
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_EARLY_DAR_Modules_GREAT.tsv", delim = "\t")
+```
+
+
+```{r}
+module_df_late2 <- module_df_late %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end, cluster)
+
+for(i in unique(module_df_late2$cluster)){
+  module_df_late2 %>% dplyr::filter(cluster == i) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_module_", i, "_hg38.bed", sep =""))
+}
+
+
+#create dfs to store results 
+great_df <- data.frame()
+
+for(i in unique(module_df_late2$cluster)){
+      module_great <- bed_GREAT_enrich(
+        bedfile = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_module_", i, "_hg38.bed", sep =""), genome = "hg38")
+      
+      #if GO enrichments, add label
+    if(nrow(module_great > 0)){
+      module_great$module <- paste("Module_", i, sep ="")
+    #otherwise, add a marker stating no results found
+    }else{
+      module_great <- data.frame(
+        ID = "NO GREAT ENRICHMENTS", 
+        name = NA,
+        Binom_Genome_Fraction = NA,
+        Binom_Expected = NA,
+        Binom_Observed_Region_Hits = NA,
+        Binom_Fold_Enrichment = NA,
+        Binom_Region_Set_Coverage = NA,
+        Binom_Raw_PValue = NA,
+        Binom_Adjp_BH = NA,
+        Hyper_Total_Genes = NA,
+        Hyper_Expected = NA,
+        Hyper_Observed_Gene_Hits = NA,
+        Hyper_Fold_Enrichment = NA,
+        Hyper_Gene_Set_Coverage = NA,
+        Hyper_Term_Gene_Coverage = NA,
+        Hyper_Raw_PValue = NA,
+        Hyper_Adjp_BH = NA,
+        Ontology = NA,
+        module = paste("Module_", i, sep ="")
+      )
+    }
+      #store results 
+      great_df <- rbind(great_df, module_great)
+      
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_LATE_DAR_Modules_GREAT.tsv", delim = "\t")
+```
+
+##comparison of human autopod module sets
+
+```{r}
+#load data
+human_modules_early <- read_tsv(file = "~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_modules.tsv")
+human_modules_late <- read_tsv(file = "~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_modules.tsv")
+
+length(unique(human_modules_early$cluster))
+length(unique(human_modules_late$cluster))
+
+for (i in 1:7){
+  shared_peaks <- length(intersect(human_modules_early$peak[which(human_modules_early$cluster == 4)], human_modules_late$peak[which(human_modules_late$cluster == i)]))
+ print(paste(shared_peaks, " shared genes with module ", i, sep = "")) 
+}
+
+for (i in 1:7){
+  shared_peaks <- length(intersect(human_modules_late$peak[which(human_modules_late$cluster == 4)], human_modules_early$peak[which(human_modules_early$cluster == i)]))
+ print(paste(shared_peaks, " shared genes with module ", i, sep = "")) 
+}
+
+```
+
+##timepoint analysis
+
+```{r}
+timepoint_DARs <- runDESEQ2_df_hs_atac(design_in = formula(~timepoint), count_data = human_ATAC_peak_ct, col_data =  sample_info) %>% dplyr::filter(abs(log2FoldChange) > 0.58) %>% dplyr::filter(padj < 0.05)
+
+length(which(timepoint_DARs$log2FoldChange > 0))
+length(which(timepoint_DARs$log2FoldChange < 0))
+timepoint_DARs$timepoint<- "EARLY"
+timepoint_DARs$timepoint[which(timepoint_DARs$log2FoldChange > 0)] <- "LATE"
+
+#timepoint_DEGs <- read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs.tsv", sep = "\t", header = T)
+write.table(x = timepoint_DARs %>% dplyr::filter(abs(log2FoldChange) > 0.58) %>% dplyr::filter(padj < 0.05)  , file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_Autopod_Timepoint_DARs.tsv", sep = "\t", col.names = T)
+
+timepoint_DARs$peak <- rownames(timepoint_DARs)
+timepoint_DARs2 <- timepoint_DARs %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end, timepoint)
+
+for(i in unique(timepoint_DARs$timepoint)){
+  timepoint_DARs2 %>% dplyr::filter(timepoint == i) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_timepoint_DARs_", i, "_hg38.bed", sep =""))
+}
+
+#create dfs to store results 
+great_df <- data.frame()
+
+for(i in unique(timepoint_DARs$timepoint)){
+      module_great <- bed_GREAT_enrich(
+        bedfile = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_timepoint_DARs_", i, "_hg38.bed", sep =""), genome = "hg38")
+      
+      #if GO enrichments, add label
+    if(nrow(module_great > 0)){
+      module_great$module <- paste("Module_", i, sep ="")
+    #otherwise, add a marker stating no results found
+    }else{
+      module_great <- data.frame(
+        ID = "NO GREAT ENRICHMENTS", 
+        name = NA,
+        Binom_Genome_Fraction = NA,
+        Binom_Expected = NA,
+        Binom_Observed_Region_Hits = NA,
+        Binom_Fold_Enrichment = NA,
+        Binom_Region_Set_Coverage = NA,
+        Binom_Raw_PValue = NA,
+        Binom_Adjp_BH = NA,
+        Hyper_Total_Genes = NA,
+        Hyper_Expected = NA,
+        Hyper_Observed_Gene_Hits = NA,
+        Hyper_Fold_Enrichment = NA,
+        Hyper_Gene_Set_Coverage = NA,
+        Hyper_Term_Gene_Coverage = NA,
+        Hyper_Raw_PValue = NA,
+        Hyper_Adjp_BH = NA,
+        Ontology = NA,
+        module = paste("Module_", i, sep ="")
+      )
+    }
+      #store results 
+      great_df <- rbind(great_df, module_great)
+      
+}
+
+## Need to add log2fold change cutoff
+write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/Human_timepoint_DARs_GREAT.tsv", delim = "\t")
+```
+
+##TF PART
+
+#load libraries for TF analysis
+library("monaLisa")
+library(TFBSTools)
+library(JASPAR2020)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(SummarizedExperiment)
+library(mia)
+
+
+#get pwm matrix for TFs
+pwms <- getMatrixSet(JASPAR2020,
+                     opts = list(matrixtype = "PWM",
+                                 species    = "9606"))
+
+#TF analysis function
+pairwise_TF_analysis <- function(bed1, 
+                                 bed2, 
+                                 ids = c("bed1", "bed2")
+){
+  #import bed files as rtracklayer
+  range1 <- rtracklayer::import(con = bed1, format = "bed")
+  range2 <- rtracklayer::import(con = bed2, format = "bed")
+  #extract human sequence
+  seqs1 <- getSeq(x = BSgenome.Hsapiens.UCSC.hg38, range1)
+  seqs2 <- getSeq(x = BSgenome.Hsapiens.UCSC.hg38, range2)
+  
+  #combine sequences into single object
+  comp_seqs <-  c(seqs1, seqs2)
+  bins <- rep(ids, c(length(seqs1), length(seqs2)))
+  bins <- factor(bins)
+  #perform motif enrichment
+  se <- calcBinnedMotifEnrR(seqs = comp_seqs, bins = bins,
+                            pwmL = pwms, BPPARAM = BiocParallel::MulticoreParam(4))
+  se_long <- merge(meltAssay(se, assay.type = "negLog10Padj", add_row_data = T, ) %>% 
+                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
+                     as.data.frame(), meltAssay(se, assay.type = "log2enr", add_row_data = T) %>% 
+                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
+                     as.data.frame()) %>% 
+    dplyr::filter(negLog10Padj > 4)
+  
+  return(se_long)
+}
+
+all_peaks_bed <- "/Users/alexanderokamoto/Desktop/Capellini_Lab/Capellini_Lab_Peak_Sets/All_Capellini_Sets/human_all_merge_IDR_0.05_brain_filtered.bed"
+
+
+early_TF_df <- data.frame()
+
+for(i in 0:7){
+  early_result <- pairwise_TF_analysis(bed1 = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_cluster_", i, "_hg38.bed", sep =""), 
+                                       bed2 = all_peaks_bed, 
+                                       ids = c(paste("early_", i, sep = ""), "all_peaks"))
+  
+  early_TF_df <- rbind(early_TF_df, early_result)
+}
+
+early_TF_df %>% write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Human_ATAC/early_module_TF_enrichments.tsv")
+read.table("~/Desktop/Capellini_Lab/Human_ATAC/early_module_TF_enrichments.tsv", header = T) %>% 
+  dplyr::filter(SampleID != "all_peaks") %>% 
+  write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Human_ATAC/early_module_TF_enrichments_cleaned.tsv")
+
+
+late_TF_df <- data.frame()
+
+for(i in 0:7){
+  late_result <- pairwise_TF_analysis(bed1 = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_cluster_", i, "_hg38.bed", sep =""), 
+                                       bed2 = all_peaks_bed, 
+                                       ids = c(paste("late_", i, sep = ""), "all_peaks"))
+  
+  late_TF_df <- rbind(late_TF_df, late_result)
+}
+
+late_TF_df %>% write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Human_ATAC/late_module_TF_enrichments.tsv")
+
+read.table("~/Desktop/Capellini_Lab/Human_ATAC/late_module_TF_enrichments.tsv", header = T) %>% 
+  dplyr::filter(SampleID != "all_peaks") %>% 
+  write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Human_ATAC/late_module_TF_enrichments_cleaned.tsv")
+
+
+early_TF_df2 <- early_TF_df %>% dplyr::filter(SampleID != "all_peaks")
+
+RNA_modules <- read.table(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_early_gene_modules.tsv", header = T, sep = "\t")
+
+
+length(unique(early_TF_df2$motif.name))
+length(unique(RNA_modules$hgnc_symbol))
+length(intersect(unique(early_TF_df2$motif.name), unique(RNA_modules$hgnc_symbol)))
+early_TF_df3 <- merge(early_TF_df2, y = RNA_modules, by.x = "motif.name", by.y ="hgnc_symbol" ) %>% 
+  dplyr::select(SampleID, cluster) %>% 
+  group_by(SampleID, cluster) %>% 
+  summarize(n = n())
+
+early_TF_per_cluster <- merge(early_TF_df2, y = RNA_modules, by.x = "motif.name", by.y ="hgnc_symbol" ) %>% 
+  dplyr::select(SampleID, cluster) %>% 
+  group_by(cluster) %>% 
+  summarize(total_n = n())
+
+
+early_TF_df4 <- merge(early_TF_df3, early_TF_per_cluster) %>% mutate(perc = n/total_n)
+
+
+early_tf_corr <- ggplot(data = early_TF_df4 %>% dplyr::filter(cluster != 0), 
+                                 aes(x = cluster, y = SampleID, 
+                                     fill = perc*100)) + 
+  geom_tile() +
+  theme_bw() + 
+  labs(x = "DEG Modules", 
+       y = "DAR Modules", 
+       fill = "TF %") + 
+  #scale_x_discrete(drop=FALSE) + 
+  #scale_y_discrete(drop=FALSE) +
+  scale_fill_gradient(low = "white", high = "darkred")
+  # +
+#scale_size_continuous(breaks = c(2, 3.5, 5))
+
+
+
