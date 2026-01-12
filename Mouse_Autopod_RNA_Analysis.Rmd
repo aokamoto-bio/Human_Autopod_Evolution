@@ -1,7 +1,7 @@
 ---
 title: "Mouse Autopod RNA Analysis"
 author: "Alexander Okamoto"
-date: "2025-12-10"
+date: "2026-1-12"
 output: html_document
 ---
 ##set filepath
@@ -219,6 +219,9 @@ write_delim(x = mouse_DEGs2, file= "/Users/alexanderokamoto/Desktop/Capellini_La
 ## Module Analysis Using WGNCA
 I followed this tutorial: https://bioinformaticsworkbook.org/tutorials/wgcna.html#gsc.tab=0
 ```{r}
+#DEGs per comparison
+mouse_DEGs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", sep = "\t", header = T))
+
 #perform initial DESeq to get normalized counts
 #glm design
 # Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
@@ -326,6 +329,10 @@ module_df <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+#calculate correlation across limbtype
+correlate_limb_eigen_genes_mouse(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Mouse\ Autopod\ RNA/Mouse_RNA_Limbtype_Module_Correlation.csv")
+
 
 MEs0 <- MEs
 
