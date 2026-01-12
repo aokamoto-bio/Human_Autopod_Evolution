@@ -1,7 +1,7 @@
 ---
 title: "Mouse ATAC Data Analysis"
 author: "Alexander Okamoto"
-date: "2025-12-10"
+date: "2026-1-12"
 output: html_document
 ---
 
@@ -347,6 +347,9 @@ module_df <- data.frame(
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
 
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Mouse_ATAC/Mouse_ATAC_Limbtype_Module_Correlation.csv")
+
 MEs0 <- MEs
 
 # Reorder modules so similar modules are next to each other
@@ -484,70 +487,4 @@ for(i in unique(module_df2$cluster)){
 write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/Mouse_DAR_Modules_GREAT.tsv", delim = "\t")
 ```
 
-##TF Analysis
 
-```{r}
-
-#load libraries for TF analysis
-library("monaLisa")
-library(TFBSTools)
-library(JASPAR2020)
-library(BSgenome.Mmusculus.UCSC.mm10)
-library(SummarizedExperiment)
-library(mia)
-
-
-#get pwm matrix for TFs
-mouse_pwms <- getMatrixSet(JASPAR2020,
-                           opts = list(matrixtype = "PWM",
-                                       species    = "10090"))
-
-#TF analysis function
-pairwise_TF_analysis_mouse <- function(bed1, 
-                                       bed2, 
-                                       ids = c("bed1", "bed2")
-){
-  #import bed files as rtracklayer
-  range1 <- rtracklayer::import(con = bed1, format = "bed")
-  range2 <- rtracklayer::import(con = bed2, format = "bed")
-  #extract human sequence
-  seqs1 <- getSeq(x = BSgenome.Mmusculus.UCSC.mm10, range1)
-  seqs2 <- getSeq(x = BSgenome.Mmusculus.UCSC.mm10, range2)
-  
-  #combine sequences into single object
-  comp_seqs <-  c(seqs1, seqs2)
-  bins <- rep(ids, c(length(seqs1), length(seqs2)))
-  bins <- factor(bins)
-  #perform motif enrichment
-  se <- calcBinnedMotifEnrR(seqs = comp_seqs, bins = bins,
-                            pwmL = mouse_pwms, BPPARAM = BiocParallel::MulticoreParam(4))
-  se_long <- merge(meltAssay(se, assay.type = "negLog10Padj", add_row_data = T, ) %>% 
-                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
-                     as.data.frame(), meltAssay(se, assay.type = "log2enr", add_row_data = T) %>% 
-                     dplyr::select(-motif.pwm, -motif.pfm) %>% 
-                     as.data.frame()) %>% 
-    dplyr::filter(negLog10Padj > 4)
-  
-  return(se_long)
-}
-
-all_mouse_peaks_bed <- "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_multiinter_simple_mm10.bed"
-
-
-mouse_TF_df <- data.frame()
-
-for(i in 0:10){
-  mouse_result <- pairwise_TF_analysis_mouse(bed1 = paste("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_mm10.bed", sep =""), 
-                                             bed2 = all_mouse_peaks_bed, 
-                                             ids = c(paste("mouse_", i, sep = ""), "all_peaks"))
-  
-  mouse_TF_df <- rbind(mouse_TF_df, mouse_result)
-}
-
-mouse_TF_df %>% write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments.tsv")
-
-read.table("~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments.tsv", header = T) %>% 
-  dplyr::filter(SampleID != "all_peaks") %>% 
-  write.table(col.names = T, row.names = F, sep = "\t", "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_module_TF_enrichments_cleaned.tsv")
-
-```
