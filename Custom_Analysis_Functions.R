@@ -2734,3 +2734,36 @@ add_multiinter_count_col <- function(dataset, grep_term, names, column_end){
   dataset[names] <- rowSums(dataset[, grep(pattern = grep_term, x = ids2)])
   return(dataset)
 }
+
+#calculate hand foot eigengene correlations from MEs
+correlate_limb_eigen_genes <- function(input, save_file = F, filename = NA){
+  #reformat input
+  input2 <- input %>% 
+    tibble::rownames_to_column("sample") %>% 
+    separate_wider_delim(cols = sample, delim = "_", names = c("sample", "tissue"))  %>%
+    rowwise %>% 
+    mutate(tissue = gsub(pattern = "M", replacement = "_M_", x = tissue)) %>% 
+    mutate(tissue = gsub(pattern = "P", replacement = "_P_", x = tissue)) %>% 
+    separate_wider_delim(cols = tissue, delim = "_", names = c("limb", "region", "digit")) %>% 
+    pivot_longer(cols = ME0:colnames(input)[max(length(colnames(input)))], names_to = "ME", values_to = "score") %>% 
+    group_by(sample, limb, digit, ME, score) %>% pivot_wider(names_from = limb, values_from =score) %>% 
+    dplyr::filter(if_any(everything(), ~ !is.na(.)))
+  #get unique modules
+  modules <- unique(input2$ME)
+  module_df <- data.frame(Module = modules, Pval = NA, R = NA)
+  for (m in 1:nrow(module_df)){
+    input2_subset <- input2 %>% dplyr::filter(ME == module_df$Module[m])
+      cor_test <- cor.test(input2_subset$H, 
+                           y = input2_subset$F, 
+                           use = "complete.obs", 
+                           method = "pearson")
+      module_df$Pval[m] <- cor_test$p.value
+      module_df$R[m] <- cor_test$estimate
+  }
+  module_df$Module <- gsub(pattern = "ME", replacement = "Module ", x = module_df$Module)
+  #save results
+  if (save_file){
+    write.csv(x = module_df %>% dplyr::filter(Module != "Module 0"), file = filename)
+  }
+ return(module_df)
+}
