@@ -1,7 +1,7 @@
 ---
 title: "Human Autopod RNA Analysis"
 author: "Alexander Okamoto"
-date: "2025-12-10"
+date: "2026-10-13"
 output: html_document
 ---
 
@@ -349,7 +349,7 @@ human_DEGs2 <- rbind(human_DEGs2, dds_res_df_late) %>% dplyr::filter(padj < 0.05
 ## Get timepoint lists of DEGs
 
 ```{r}
-human_DEGs2 <- read_table(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs.tsv")
+human_DEGs2 <- read_delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/All_Human_Bio_Pairwise_Autopod_DEGs2.tsv")
 
 #get timepoint information for each DEG comparison
 human_DEGs2$tissue1_tp <- str_sub(human_DEGs2$tissue1, start= -1)
@@ -486,7 +486,7 @@ netwk <- blockwiseModules(input_mat,                # <= input here
                           mergeCutHeight = 0.25,
 
                           # == TOM == Archive the run results in TOM file (saves time)
-                          saveTOMs = T,
+                          saveTOMs = F,
                           saveTOMFileBase = "ER",
 
                           # == Output Options
@@ -502,6 +502,11 @@ module_df_early <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Human Autopod RNA/Early_RNA_Limbtype_Module_Correlation.csv")
+
+
 MEs0 <- MEs
 
 # Reorder modules so similar modules are next to each other
@@ -567,6 +572,7 @@ ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_early_RNA_clu
 #late
 
 ```{r}
+set.seed(1)
 #glm design
 # Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
 design <- formula(~replicate + limbtype)
@@ -668,7 +674,7 @@ netwk <- blockwiseModules(input_mat,                # <= input here
                           mergeCutHeight = 0.25,
 
                           # == TOM == Archive the run results in TOM file (saves time)
-                          saveTOMs = T,
+                          saveTOMs = F,
                           saveTOMFileBase = "ER",
 
                           # == Output Options
@@ -683,6 +689,11 @@ module_df_late <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Human Autopod RNA/Late_RNA_Limbtype_Module_Correlation.csv")
+
+
 MEs0 <- MEs
 
 # Reorder modules so similar modules are next to each other
@@ -754,13 +765,9 @@ plt11 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_1
   image_ggplot()
 plt12 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_12.png") %>%
   image_ggplot()
-plt13 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_13.png") %>%
-  image_ggplot()
-plt14 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_late_RNA_cluster_14.png") %>%
-  image_ggplot()
 
 #generate and save plot
-human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, plt13, plt14, nrow =3, ncol = 5, labels = 1:14, align="hv")
+human_RNA_clusters_wgcna <- plot_grid(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, plt9, plt10, plt11, plt12, nrow =3, ncol = 5, labels = 1:12, align="hv")
 ggsave(human_RNA_clusters_wgcna, device = "png", filename = "human_late_RNA_clusters_wgcna.png", path = "~/Desktop/Autopod_Skeleton_Figures/", width = 10, height = 10, dpi = 1000)
 ```
 
