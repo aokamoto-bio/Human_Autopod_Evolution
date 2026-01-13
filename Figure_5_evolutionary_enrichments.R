@@ -1,6 +1,6 @@
 #create plot showing enrichment of evolutionary signal in DAR modules
 #Alexander Okamoto
-#December 10, 2025
+#January 13, 2026
 
 library("LOLA")
 library(rtracklayer)
@@ -12,9 +12,6 @@ system("cp ~/Desktop/Capellini_Lab/Structural_Variant_Beds/human_SDRs_hg38.bed  
 system("cp ~/Desktop/Capellini_Lab/HARs/HARs_AO_2024_merged_hg38.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
 system("cp ~/Desktop/Capellini_Lab/Capellini_Lab_Peak_Sets/Other_Peak_sets/hCONDELs_Xue_McLean_hg38.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
 system("cp ~/Desktop/Capellini_Lab/Structural_Variant_Beds/HAQERS_T2T_hg38.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
-system("cp ~/Desktop/Capellini_Lab/Human_ATAC/corrected_multiinter_autopod_human_vars.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
-system("cp ~/Desktop/Capellini_Lab/Human_ATAC/corrected_multiinter_autopod_chimp_vars.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
-system("cp ~/Desktop/Capellini_Lab/Human_ATAC/corrected_multiinter_autopod_gorilla_vars.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
 system("cp ~/Desktop/290k_MPRA_Cluster_Results/beds/290k_all_emvars_hg38.bed  ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
 system("cp ~/Desktop/Capellini_Lab/Structural_Variant_Beds/human_specific_inversionsflank_500000_hg38.bed ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
 system("cp ~/Desktop/Capellini_Lab/Structural_Variant_Beds/human_SDRsflank_500000_hg38.bed ~/Desktop/Capellini_Lab/Autopod_LOLA/regions")
@@ -73,10 +70,7 @@ human_evol_mod_enrich <- ggplot(data = locResults2,
        size = "Odds Ratio", color = 
          expression("-log"[10]*" adj. p-value")) + 
   scale_y_discrete(drop=FALSE, 
-                   labels = c("chimp_SNVs" = "Chimp SNVs",
-                              "gorilla_SNVs" = "Gorilla SNVs",
-                              "human_SNVs" = "Human SNVs", 
-                              "MPRA_Diff_Act" = "Differentially active (MPRA)",
+                   labels = c("MPRA_Diff_Act" = "Differentially active (MPRA)",
                               "inversion_flank" = "Inversion flanks",
                               "inversions" = "Inversions",
                               "SDR_flank" = "SDR flanks",
@@ -84,11 +78,12 @@ human_evol_mod_enrich <- ggplot(data = locResults2,
   scale_x_discrete(drop=FALSE, 
                    labels = c("all_DARs" = "All DARs", 
                               "early2" = "Early 2", 
-                              "early4" = "Early 4", 
-                              "early7" = "Early 7",
+                              "early3" = "Early 3", 
+                              "early6" = "Early 6",
+                              "late1" = "Late 1",
                               "late2" = "Late 2", 
-                              "late3" = "Late 3", 
-                              "late4" = "Late 4")) +
+                              "late4" = "Late 4", 
+                              "late7" = "Late 7")) +
   scale_size_continuous(breaks = c(1, 2, 3)) +
   scale_color_gradient(low = "gray", high = "darkgreen")
 
