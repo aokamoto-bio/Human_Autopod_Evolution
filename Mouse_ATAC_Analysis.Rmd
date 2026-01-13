@@ -1,7 +1,7 @@
 ---
 title: "Mouse ATAC Data Analysis"
 author: "Alexander Okamoto"
-date: "2026-1-12"
+date: "2026-1-13"
 output: html_document
 ---
 
@@ -16,7 +16,6 @@ library(ChIPQC)
 library(rtracklayer)
 library(DT)
 library(tidyverse)
-library(soGGi)
 library(GenomicRanges)
 
 library(readxl) #for loading excel files
@@ -486,5 +485,3 @@ for(i in unique(module_df2$cluster)){
 ## Need to add log2fold change cutoff
 write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/Mouse_DAR_Modules_GREAT.tsv", delim = "\t")
 ```
-
-
