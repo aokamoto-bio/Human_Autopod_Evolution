@@ -1,6 +1,6 @@
-#create figure showing human autopod wgcna results 
+#create supplementary figure showing human autopod RNA-seq wgcna results 
 #Alexander Okamoto
-#December 10, 2025
+#January 13, 2025
 
 #load packages
 library(tidyverse)
@@ -8,6 +8,7 @@ library(cowplot)
 library(TxDb.Hsapiens.UCSC.hg38.knownGene)
 library("AnnotationDbi")
 library("org.Hs.eg.db")
+library(rGREAT)
 
 #load cluster plots
 #late modules
@@ -111,9 +112,7 @@ rna_modules_list <- list(
   "b9" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 9), 
   "b10" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 10), 
   "b11" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 11), 
-  "b12" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 12), 
-  "b13" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 13), 
-  "b14" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 14)
+  "b12" = get_cluster_entrez_ids(cluster_df = RNA_modules, clust = 12)
 )
 
 #gr = randomRegions(genome = "hg38")
@@ -136,7 +135,7 @@ mod_enrich_df2 <- mod_enrich_df%>%
 #for visualization purposes, the minimum p-value was set as 1e-10
 mod_enrich_df2$p_adjust[which(mod_enrich_df2$p_adjust == 0)] <- 1e-10
 #factor plotting variables
-mod_enrich_df2$id <- factor(mod_enrich_df2$id, levels = paste("b", 1:14, sep = ""))
+mod_enrich_df2$id <- factor(mod_enrich_df2$id, levels = paste("b", 1:12, sep = ""))
 mod_enrich_df2$DAR_mod <- paste("a", mod_enrich_df2$DAR_mod, sep ="")
 mod_enrich_df2$DAR_mod <- factor(mod_enrich_df2$DAR_mod, levels = paste("a", 1:7, sep = ""))
 
@@ -175,7 +174,7 @@ late_TF_per_cluster <- merge(late_TF_df2, y = RNA_modules, by.x = "motif.name", 
 late_TF_df4 <- merge(late_TF_df3, late_TF_per_cluster) %>% mutate(perc = n/total_n)
 
 late_TF_df4$cluster <- paste("b", late_TF_df4$cluster, sep = "")
-late_TF_df4$cluster <- factor(late_TF_df4$cluster, levels = paste("b", 1:14, sep = ""))
+late_TF_df4$cluster <- factor(late_TF_df4$cluster, levels = paste("b", 1:12, sep = ""))
 
 late_TF_df4$SampleID <- gsub(pattern = "late_", replacement = "a", late_TF_df4$SampleID)
 late_tf_corr <- ggplot(data = late_TF_df4 %>% dplyr::filter(cluster != "b0"), 
@@ -214,14 +213,12 @@ human_late_plot <- ggdraw() +
   draw_plot(late_plt10, x = skel_w*2, y = skel_h*2, width = skel_w, height = skel_h) +
   draw_plot(late_plt11, x = skel_w*3, y = skel_h*2, width = skel_w, height = skel_h) +
   draw_plot(late_plt12, x = skel_w*4, y = skel_h*2, width = skel_w, height = skel_h) +
-  draw_plot(late_plt13, x = skel_w*5, y = skel_h*2, width = skel_w, height = skel_h) +
-  draw_plot(late_plt14, x = skel_w*6, y = skel_h*2, width = skel_w, height = skel_h) +
   draw_plot(late_wgcna_corr_great, x = 0, y = 0, width = 0.6, height = skel_h*2) +
   draw_plot(late_tf_corr, x = 0.6, y = 0, width = 0.4, height = skel_h*2) +
-  draw_plot_label(label = c(paste("a", 1:7, sep = ""), paste("b", 1:14, sep = ""), "c", "d"), 
+  draw_plot_label(label = c(paste("a", 1:7, sep = ""), paste("b", 1:12, sep = ""), "c", "d"), 
                   size = 12,
-                  x = c(rep((0:6*skel_w), times = 3), 0, 0.6), 
-                  y = c(rep(c(1, 1-skel_h, 1-2*skel_h), each =7), 1-skel_h*3, 1-skel_h*3)
+                  x = c(rep((0:6*skel_w), times = 2), (0:4*skel_w), 0, 0.6), 
+                  y = c(rep(c(1, 1-skel_h), each =7), rep(1-2*skel_h, 5), 1-skel_h*3, 1-skel_h*3)
                   ) + 
   bgcolor("white")
 
