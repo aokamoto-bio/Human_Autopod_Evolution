@@ -16,7 +16,6 @@ library(ChIPQC)
 library(rtracklayer)
 library(DT)
 library(tidyverse)
-library(soGGi)
 library(GenomicRanges)
 
 library(readxl) #for loading excel files
@@ -47,6 +46,8 @@ colnames(human_ATAC_peak_counts)[1] <- "peak"
 
 
 sample_info <- read.table("~/Desktop/Capellini_Lab/Human_ATAC/ATAC_files2.txt", header=TRUE)
+
+
 sample_info$limbtype <- as.factor(sample_info$limbtype)
 sample_info$replicate <- as.factor(sample_info$H_ID)
 
@@ -315,19 +316,19 @@ filteredMetaData$sampleTypeTP <- factor(filteredMetaData$sampleTypeTP, levels = 
    }
  }
 
- write_delim(x = as.data.frame(human_DARs) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58), file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/All_Human_Bio_Pairwise_Autopod_DARs.tsv", delim = "\t")
+ write_delim(x = as.data.frame(human_DARs) %>% dplyr::filter(padj < 0.05, abs(log2FoldChange) > 0.58), file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/All_Human_Bio_Pairwise_Autopod_DARs.tsv", delim = "\t")
 ```
 
 ## Get timepoint lists of DEGs
 ```{r}
 human_DARs <- read.delim(file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/All_Human_Bio_Pairwise_Autopod_DARs.tsv", sep = "\t", header = T)
 
-human_DARs %>% 
-  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
-  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
-  dplyr::select(chr, start, end) %>% 
-  distinct() %>% 
-  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_DARs_hg38.bed", ncol = 3)
+#human_DARs %>% 
+#  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+#  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+#  dplyr::select(chr, start, end) %>% 
+#  distinct() %>% 
+#  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_DARs_hg38.bed", ncol = 3)
 
 
 #get timepoint information for each DAR comparison
@@ -340,6 +341,7 @@ human_DARs_early <- human_DARs %>% dplyr::filter(tissue1_tp == "E" & tissue2_tp 
 human_DARs_late <- human_DARs %>% dplyr::filter(tissue1_tp == "L" & tissue2_tp == "L")
 
 #get counts
+length(unique(human_DARs$peak))
 length(unique(human_DARs_early$peak))
 length(unique(human_DARs_late$peak))
 length(intersect(human_DARs_early$peak, human_DARs_late$peak))
@@ -454,7 +456,7 @@ netwk <- blockwiseModules(input_mat,                # <= input here
                           mergeCutHeight = 0.25,
 
                           # == TOM == Archive the run results in TOM file (saves time)
-                          saveTOMs = T,
+                          saveTOMs = F,
                           saveTOMFileBase = "ER",
 
                           # == Output Options
@@ -470,6 +472,10 @@ module_df_early <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Human_ATAC/Early_ATAC_Limbtype_Module_Correlation.csv")
+
 MEs0 <- MEs
 
 # Reorder modules so similar modules are next to each other
@@ -640,6 +646,9 @@ module_df_late <- data.frame(
 
 # Get Module Eigengenes per cluster
 MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Human_ATAC/Late_ATAC_Limbtype_Module_Correlation.csv")
+
 MEs0 <- MEs
 
 # Reorder modules so similar modules are next to each other
