@@ -529,3 +529,86 @@ awk 'BEGIN{FS=OFS="\t"; print "GeneID\tChr\tStart\tEnd\tStrand"}{print $4, $1, $
 cp $SCRATCH/capellini_lab/Lab/Mouse_noMT/* /n/capellini_lab/users/aokamoto/Autopod_Project/Mouse_ATAC
 ```
 
+### for generating bigwig files (skeleton script)
+
+```{bash}
+
+#load samtools and deeptools
+module load python/3.12.11-fasrc01
+source activate base
+conda activate /n/home04/aokamoto/.conda/envs/deeptools
+
+#iterate over bams
+for bam_file in *noMT.bam; do
+
+ # Extract the base name (e.g., "sample" from "sample.bam")
+        base="${bam_file%.bam}"
+        echo "Creating bigwig file for $bam_file"
+# sort bam files 
+        samtools sort -@ 12 $bam_file -o "${base}.sorted.bam"
+#index bam files
+        samtools index -@ 11 "${base}.sorted.bam"
+#index convert bam to bigwig
+        bamCoverage -p 12 -b "${base}.sorted.bam" -o "${base}.sorted.bw"
+done
+
+```
+
+### for calculating Pearson correlation coefficents between biological replicates (skeleton script)
+```{bash}
+#load deeptools
+module load python/3.12.11-fasrc01
+source activate base
+conda activate /n/home04/aokamoto/.conda/envs/deeptools
+
+#iterate over tissues each tissue
+for sample in HP1 HP2 HP3 HP4 HP5 HM1 HM2 HM3 HM4 HM5 FP1 FP2 FP3 FP4 FP5 FM1 FM2 FM3 FM4 FM5
+        do
+        multiBigwigSummary bins -b 28597_${sample}.noMT.sorted.bw 28824_${sample}.noMT.sorted.bw 28829_${sample}.noMT.sorted.bw -o ${sample}_early_results.npz
+        plotCorrelation -in ${sample}_early_results.npz -c pearson -p heatmap -o plot.png --outFileCorMatrix ${sample}_early_PearsonCorr_bigwigScores.tab
+done
+
+```
+
+### for geting TSS enrichment for ATAC-samples
+```{r}
+## load packages
+library(ATACseqQC)
+library(ChIPpeakAnno)
+library("GenomicAlignments")
+library(TxDb.Hsapiens.UCSC.hg38.knownGene) #for human
+library(TxDb.Mmusculus.UCSC.mm10.knownGene) #for mouse
+
+library(Rsamtools)
+
+output_file <- "human_TSS"
+reps = c("29042", "29067")
+
+txs <- transcripts(TxDb.Hsapiens.UCSC.hg38.knownGene)
+
+#set parameters for reading BAMs
+flag <- scanBamFlag(
+  isUnmappedQuery      = FALSE,
+  isSecondaryAlignment = FALSE,
+  isDuplicate          = FALSE
+)
+
+param <- ScanBamParam(
+  flag  = flag
+)
+
+samples = c("FM1", "FM2", "FM3", "FM4", "FM5", "FP1", "FP2", "FP3", "FP4", "FP5", "HM1", "HM2", "HM3", "HM4", "HM5", "HP1", "HP2", "HP3", "HP4", "HP5")
+
+#create df for TSS enrichment results
+TSS_df <- data.frame(sample = paste(rep(reps, each = 5), "_", samples, ".noMT.sorted.bam", sep = ""), TSS_score = NA)
+
+for (i in 1:nrow(TSS_df)){
+  gal <- readGAlignments(TSS_df$sample[i], param = param)
+  tsse <- TSSEscore(gal, txs)
+  TSS_df$TSS_score[i] <- tsse$TSSEscore
+  write.table(x = TSS_df, file = paste(output_file, ".tsv", sep =""), sep = "\t", )
+}
+```
+
+
+
