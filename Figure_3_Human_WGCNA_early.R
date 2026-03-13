@@ -1,6 +1,6 @@
 #create figure showing human autopod ATAC-seq WGCNA results (early)
 #Alexander Okamoto
-#December 10, 2025
+#March 13, 2025
 
 #load packages
 library(tidyverse)
@@ -172,6 +172,22 @@ human_early_plot <- ggdraw() +
                   size = 12,
                   x = c((0:6*skel_w), (0:3*skel_w), 0, 0.6), 
                   y = c(rep(1, times = 7), rep(1-skel_h, times = 4), 1-skel_h*2, 1-skel_h*2)
+  ) + #now add gene names
+  draw_plot_label(
+    label = c("IL17RD", "COL11A2", "EGR2", "KRT1"),
+    fontface = "italic",
+    size = 10,
+    x = c((0:3*(skel_w)) + 0.05),
+    y = c(rep(1-skel_h, times =4)),
+    hjust = 0
+  ) + #add GO enrichments
+  draw_plot_label(
+    label = c("cartilage dev.", "limb dev.", "collagen", "nitrogen resp.", "abnorm. limb", "steroid resp.", "skeletal dev."),
+    size = 8,
+    x = c((0:6*(skel_w)) + 0.05),
+    y = c(rep(1, times =7)),
+    hjust = 0, 
+    vjust = 2,
   ) + 
   bgcolor("white")
 
