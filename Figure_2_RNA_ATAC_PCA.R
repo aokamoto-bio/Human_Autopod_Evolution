@@ -204,6 +204,24 @@ assay(human_rsem.vst) <- mat
 # perform a PCA on the data in assay(x) for the selected genes
 human_sample_pca <- prcomp(t(assay(human_rsem.vst)))
 
+#investigate most associated genes 
+loadings <- as.data.frame(human_sample_pca$rotation)
+top_genes_pc1 <- rownames(loadings[order(abs(loadings$PC1), decreasing = TRUE), ])[1:50]
+top_genes_pc2 <- rownames(loadings[order(abs(loadings$PC2), decreasing = TRUE), ])[1:50]
+
+top_genes_pc1_annot <- annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc1)
+top_genes_pc2_annot <- annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc2)
+
+top_genes_pc1_GO <- simple_go_analysis(top_genes_pc1_annot$hgnc_symbol)
+top_genes_pc2_GO <- simple_go_analysis(top_genes_pc2_annot$hgnc_symbol)
+top_genes_pc1_GO$GeneRatio <- paste("'", top_genes_pc1_GO$GeneRatio, "'", sep ="")
+top_genes_pc2_GO$GeneRatio <- paste("'", top_genes_pc2_GO$GeneRatio, "'", sep ="")
+
+write_tsv(x = top_genes_pc1_annot, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc1.tsv")
+write_tsv(x = top_genes_pc2_annot, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc2.tsv")
+write_tsv(x = top_genes_pc1_GO, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc1_GO.tsv")
+write_tsv(x = top_genes_pc2_GO, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc2_GO.tsv")
+                    
 # Variance explained by PCs
 human_pc_eigenvalues <- human_sample_pca$sdev^2
 
