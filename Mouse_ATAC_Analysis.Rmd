@@ -1,7 +1,7 @@
 ---
 title: "Mouse ATAC Data Analysis"
 author: "Alexander Okamoto"
-date: "2026-1-13"
+date: "2026-3-13"
 output: html_document
 ---
 
@@ -380,9 +380,12 @@ color_cluster_key <- module_df %>%
   group_by(cluster) %>% 
   summarize(peak_n = n()) 
 
-write_delim(module_df %>% 
-              dplyr::left_join(color_cluster_key) %>% 
-              dplyr::select(gene_id, cluster) %>% dplyr::rename(peak = gene_id) %>% arrange(cluster) ,
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "peak") %>% pivot_longer(cols = `kME0`:`kME10`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
+write_delim(module_df %>% left_join(color_cluster_key) %>% 
+ dplyr::select(gene_id, cluster) %>% dplyr::rename(peak = gene_id) %>% left_join(module_membership, by = join_by(peak, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_clusters.tsv",
             delim = "\t")
             
