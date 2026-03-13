@@ -2721,7 +2721,7 @@ bed_GREAT_enrich <- function(bedfile, genome = "hg38"){
     arrange(Ontology, Binom_Adjp_BH)
   
   #if GO enrichments, add label
-    if(nrow(cluster_go_summary > 0)){
+    if(nrow(cluster_go_summary) > 0){
       cluster_go_summary$gene_set <- paste("Cluster_", i, sep ="")
     #otherwise, add a marker stating no results found
     }else{
