@@ -532,8 +532,11 @@ color_cluster_key <- module_df_early %>%
   group_by(cluster) %>% 
   summarize(gene_n = n()) 
 
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "ensembl_gene_id") %>% pivot_longer(cols = `kME0`:`kME4`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
 write_delim(module_df_early %>% left_join(color_cluster_key) %>% 
-  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster),
+  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% left_join(module_membership, by = join_by(ensembl_gene_id, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_early_gene_modules.tsv",
             delim = "\t")
 
@@ -719,8 +722,12 @@ color_cluster_key <- module_df_late %>%
   group_by(cluster) %>% 
   summarize(gene_n = n()) 
 
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "ensembl_gene_id") %>% pivot_longer(cols = `kME0`:`kME12`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
 write_delim(module_df_late %>% left_join(color_cluster_key) %>% 
-  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster),
+  left_join(annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, hgnc_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% left_join(module_membership, by = join_by(ensembl_gene_id, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_late_gene_modules.tsv",
             delim = "\t")
 
@@ -1156,13 +1163,25 @@ human_modules_late <- read_tsv(file = "~/Desktop/Capellini_Lab/Human Autopod RNA
 mouse_modules <- read_tsv(file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_gene_clusters.tsv")
 
 length(unique(human_modules$cluster))
-length(unique(human_modules_early$cluster))
-length(unique(human_modules_late$cluster))
+length(unique(human_modules_early$hgnc_symbol))
+length(unique(human_modules_late$hgnc_symbol))
+
+total_genes <- length(unique(c(human_modules_early$ensembl_gene_id, human_modules_late$ensembl_gene_id)))
 
 for (i in 1:12){
-  shared_genes <- length(intersect(human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == 5)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
+  shared_genes <- length(intersect(human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == i)], human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 4)]))
+early_genes <- length(which(human_modules_early$cluster == 4))
+late_genes <- length(which(human_modules_late$cluster == i))
+prob <- phyper(shared_genes - 1 , early_genes, total_genes - early_genes, late_genes, lower.tail=FALSE)
+  if (prob < 0.05){
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = "")) 
+  }
 }
+
+
+
+
 
 for (i in 1:12){
   shared_genes <- length(intersect(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == 2)], human_modules$ensembl_gene_id[which(human_modules$cluster == i)]))
@@ -1174,15 +1193,59 @@ for (i in 1:12){
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
 }
 
+
+
+#DEGs per comparison
+mouse_DEGs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", sep = "\t", header = T))
+
+#now for human - mouse comparison
+human_mouse_orthologs <- unique(intersect(human_DEGs2$ensembl_gene_id, mouse_to_human_gene(mouse_DEGs$ensembl_gene_id)))
+length(human_mouse_orthologs)
+
+
+human_modules_early_mouse <- human_modules_early %>% as.data.frame() %>%  dplyr::filter(ensembl_gene_id %in% human_mouse_orthologs)
+
+human_modules_late_mouse <- human_modules_late %>% as.data.frame() %>%  dplyr::filter(ensembl_gene_id %in% human_mouse_orthologs)
+
 for (i in 1:12){
   shared_genes <- length(intersect(human_modules$ensembl_gene_id[which(human_modules$cluster == 5)], mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)])))
  print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
 }
 
-#DEGs per comparison
-mouse_DEGs <- unique(read.delim(file= "/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse Autopod RNA/All_Mouse_Bio_Pairwise_Autopod_DEGs.tsv", sep = "\t", header = T))
+mouse_human_enrichment = data.frame()
+#mouse_module = NA, human_module = NA, shared_genes =NA, p_val = NA)
 
-length(intersect(human_DEGs2$ensembl_gene_id, mouse_to_human_gene(mouse_DEGs$ensembl_gene_id)))
+for (i in 1:13){
+  for (j in 1:4){
+  shared_genes <- length(intersect(human_modules_early_mouse$ensembl_gene_id[which(human_modules_early_mouse$cluster == j)], mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)])))
+human_genes <- length(which(human_modules_early_mouse$cluster == j))
+mouse_genes <- length(mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)]))
+prob <- phyper(shared_genes - 1 , human_genes, total_genes - human_genes, mouse_genes, lower.tail=FALSE)
+  if (prob < 0.05){
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+ results = data.frame(mouse_module = paste("Module", i), human_module = paste("Early", j), shared_genes = shared_genes, p_val = formatC(prob, format = "e"))
+ mouse_human_enrichment <- rbind(mouse_human_enrichment, results)
+    }
+  }
+}
+
+for (i in 1:13){
+  for (j in 1:12){
+  shared_genes <- length(intersect(human_modules_late_mouse$ensembl_gene_id[which(human_modules_late_mouse$cluster == j)], mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)])))
+human_genes <- length(which(human_modules_late_mouse$cluster == j))
+mouse_genes <- length(mouse_to_human_gene(mouse_modules$ensembl_gene_id[which(mouse_modules$cluster == i)]))
+prob <- phyper(shared_genes - 1 , human_genes, total_genes - human_genes, mouse_genes, lower.tail=FALSE)
+  if (prob < 0.05){
+ print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+ results = data.frame(mouse_module = paste("Module", i), human_module = paste("Late", j), shared_genes = shared_genes, p_val = formatC(prob, format = "e"))
+ mouse_human_enrichment <- rbind(mouse_human_enrichment, results)
+    }
+  }
+}
+
+write_tsv(mouse_human_enrichment, file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/human_mouse_DEG_ortholog_module_enrichments.tsv")
 ```
 
 ##timepoint analysis
@@ -1209,4 +1272,51 @@ timepoint_GO <- rbind(early_GO, late_GO)
   timepoint_GO$GeneRatio <- paste("'", timepoint_GO$GeneRatio, "'", sep ="")
   timepoint_GO$BgRatio <- paste("'", timepoint_GO$BgRatio, "'", sep ="")
   write.csv(timepoint_GO, file = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human Autopod RNA/Human_Autopod_Timepoint_DEGs_GO_enrichments.csv", row.names = F)
+```
+Deeper dive into digit I
+```{r}
+human_DEGs2_digI <- human_DEGs2 %>% 
+  dplyr::filter(tissue1 %in% c("METATARSAL1E", "METATARSAL1L", "FOOTPHALANGES1E", "FOOTPHALANGES1L", "METACARPAL1E", "METACARPAL1L", "HANDPHALANGES1E", "HANDPHALANGES1L")) %>% 
+  dplyr::filter(tissue2 %in% c("METATARSAL2E", "METATARSAL2L", "FOOTPHALANGES2E", "FOOTPHALANGES2L", "METACARPAL2E", "METACARPAL2L", "HANDPHALANGES2E", "HANDPHALANGES2L"))
+
+#get total number of dig 1 DEGs
+dig1_DEGs <- unique(human_DEGs2_digI$ensembl_gene_id)
+length(dig1_DEGs)
+
+dig1_enrichment = data.frame()
+#mouse_module = NA, human_module = NA, shared_genes =NA, p_val = NA)
+
+for (j in 0:4){
+  total_genes <- length(unique(c(human_modules_early$ensembl_gene_id, digI_genes)))
+  shared_genes <- length(which(human_modules_early$ensembl_gene_id[which(human_modules_early$cluster == j)] %in% dig1_DEGs))
+  cluster_genes <- length(which(human_modules_early$cluster == j))
+  digI_genes <- length(dig1_DEGs)
+  prob <- phyper(shared_genes - 1 , cluster_genes, total_genes - cluster_genes, digI_genes, lower.tail=FALSE)
+  if (prob < 0.05){
+   print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+   print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+   results = data.frame( human_module = paste("Early", j), shared_genes = shared_genes, p_val = formatC(prob, format = "e"))
+   dig1_enrichment <- rbind(dig1_enrichment, results)
+    }
+  }
+
+for (j in 0:12){
+  total_genes <- length(unique(c(human_modules_late$ensembl_gene_id, digI_genes)))
+  shared_genes <- length(which(human_modules_late$ensembl_gene_id[which(human_modules_late$cluster == j)] %in% dig1_DEGs))
+  cluster_genes <- length(which(human_modules_late$cluster == j))
+  digI_genes <- length(dig1_DEGs)
+  prob <- phyper(shared_genes - 1 , cluster_genes, total_genes - cluster_genes, digI_genes, lower.tail=FALSE)
+  if (prob < 0.05){
+   print(paste(shared_genes, " shared genes with module ", i, sep = "")) 
+   print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+   results = data.frame( human_module = paste("late", j), shared_genes = shared_genes, p_val = formatC(prob, format = "e"))
+   dig1_enrichment <- rbind(dig1_enrichment, results)
+    }
+}
+
+
+write_tsv(dig1_enrichment, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_dig1_DEG_module_enrichments.tsv")
+
+binom.test(length(which(human_DEGs2_digI$stat> 0)), nrow(human_DEGs2_digI), p = 0.5, alternative = "two.sided", conf.level = 0.95)
+
 ```
