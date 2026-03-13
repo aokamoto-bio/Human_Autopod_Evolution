@@ -1,7 +1,7 @@
 ---
 title: "Human ATAC Data Analysis"
 author: "Alexander Okamoto"
-date: "2025-12-10"
+date: "2026-3-13"
 output: html_document
 ---
 
@@ -501,8 +501,12 @@ color_cluster_key <- module_df_early %>%
   group_by(cluster) %>% 
   summarize(peak_n = n()) 
 
-write_delim(module_df_early %>% dplyr::left_join(color_cluster_key) %>% 
-  dplyr::select(peak, cluster) %>% dplyr::arrange(cluster),
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "peak") %>% pivot_longer(cols = `kME0`:`kME7`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
+write_delim(module_df_early %>% left_join(color_cluster_key) %>% 
+ dplyr::select(peak, cluster) %>% left_join(module_membership, by = join_by(peak, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_modules.tsv",
             delim = "\t")
 
@@ -674,8 +678,12 @@ color_cluster_key <- module_df_late %>%
   group_by(cluster) %>% 
   summarize(peak_n = n()) 
 
-write_delim(module_df_late %>% dplyr::left_join(color_cluster_key) %>% 
-  dplyr::select(peak, cluster) %>% arrange(cluster),
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "peak") %>% pivot_longer(cols = `kME0`:`kME7`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
+write_delim(module_df_late %>% left_join(color_cluster_key) %>% 
+ dplyr::select(peak, cluster) %>% left_join(module_membership, by = join_by(peak, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_modules.tsv",
             delim = "\t")
 
@@ -837,16 +845,90 @@ human_modules_late <- read_tsv(file = "~/Desktop/Capellini_Lab/Human_ATAC/human_
 length(unique(human_modules_early$cluster))
 length(unique(human_modules_late$cluster))
 
+total_peaks <- length(unique(c(human_modules_early$peak, human_modules_late$peak)))
+
 for (i in 1:7){
   shared_peaks <- length(intersect(human_modules_early$peak[which(human_modules_early$cluster == 4)], human_modules_late$peak[which(human_modules_late$cluster == i)]))
  print(paste(shared_peaks, " shared genes with module ", i, sep = "")) 
 }
 
 for (i in 1:7){
-  shared_peaks <- length(intersect(human_modules_late$peak[which(human_modules_late$cluster == 4)], human_modules_early$peak[which(human_modules_early$cluster == i)]))
- print(paste(shared_peaks, " shared genes with module ", i, sep = "")) 
+  for (j in 1:7){
+  shared_peaks <- length(intersect(human_modules_late$peak[which(human_modules_late$cluster == i)], human_modules_early$peak[which(human_modules_early$cluster == j)])) 
+early_peaks <- length(which(human_modules_early$cluster == j))
+late_peaks <- length(which(human_modules_late$cluster == i))
+prob <- phyper(shared_peaks - 1 , early_peaks, total_peaks - early_peaks, late_peaks, lower.tail=FALSE)
+if (prob < 0.05){
+ print(paste("late module ", i, " shares ", shared_peaks, " peaks with early module ", j, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = "")) 
+  }
+  }
 }
 
+for(i in 1:10){
+  liftover_to_hg38(paste("/Users/alexanderokamoto/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_mm10.bed", sep =""), chain = "mm10tohg38")
+}
+
+
+#now for mouse
+human_mouse_DAR_overlap <- system("bedtools intersect -a /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", intern = T) %>% parse_number()
+
+human_mouse_DAR_overlap <- system("bedtools intersect -a /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", intern = T) %>% parse_number()
+
+#create beds for all human DARs at each timepoint
+human_modules_early %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_early_DARs_hg38.bed", sep =""))
+
+human_modules_late %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+    write_bed(ncol = 3, filename = paste("~/Desktop/Capellini_Lab/Human_ATAC/human_late_DARs_hg38.bed", sep =""))
+
+mouse_human_enrichment = data.frame()
+#mouse_module = NA, human_module = NA, shared_genes =NA, p_val = NA)
+
+total_peaks <- system("bedtools intersect -a ~/Desktop/Capellini_Lab/Human_ATAC/human_early_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", intern = T) %>% parse_number()
+
+for (j in 1:7){
+  for (i in 1:10){
+  total_peaks <- system("bedtools intersect -a ~/Desktop/Capellini_Lab/Human_ATAC/human_early_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", intern = T) %>% parse_number()
+  shared_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_module_", j, "_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_hg38.bed | wc -l", sep = ""), intern = T) %>% parse_number()
+  human_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_early_DAR_module_", j, "_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", sep =""), intern = T) %>% parse_number()
+
+mouse_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_early_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_hg38.bed | wc -l", sep = ""), intern = T) %>% parse_number()
+prob <- phyper(shared_peaks - 1 , human_peaks, total_peaks - human_peaks, mouse_peaks, lower.tail=FALSE)
+  if (prob < 0.05){
+ print(paste(shared_peaks, " shared peaks with module ", i, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+ results = data.frame(mouse_module = paste("Module", i), human_module = paste("Early", j), shared_peaks = shared_peaks, p_val = formatC(prob, format = "e"))
+ mouse_human_enrichment <- rbind(mouse_human_enrichment, results)
+    }
+  }
+}
+
+for (j in 1:7){
+  for (i in 1:10){
+  total_peaks <- system("bedtools intersect -a ~/Desktop/Capellini_Lab/Human_ATAC/human_late_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", intern = T) %>% parse_number()
+  shared_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_module_", j, "_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_hg38.bed | wc -l", sep = ""), intern = T) %>% parse_number()
+  human_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_late_DAR_module_", j, "_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DARs_hg38.bed | wc -l", sep =""), intern = T) %>% parse_number()
+
+mouse_peaks <- system(paste("bedtools intersect -a  /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_late_DARs_hg38.bed -b ~/Desktop/Capellini_Lab/Mouse_ATAC/mouse_DAR_module_", i, "_hg38.bed | wc -l", sep = ""), intern = T) %>% parse_number()
+prob <- phyper(shared_peaks - 1 , human_peaks, total_peaks - human_peaks, mouse_peaks, lower.tail=FALSE)
+  if (prob < 0.05){
+ print(paste(shared_peaks, " shared peaks with module ", i, sep = "")) 
+ print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+ results = data.frame(mouse_module = paste("Module", i), human_module = paste("Late", j), shared_peaks = shared_peaks, p_val = formatC(prob, format = "e"))
+ mouse_human_enrichment <- rbind(mouse_human_enrichment, results)
+    }
+  }
+}
+
+write_tsv(mouse_human_enrichment, file = "~/Desktop/Capellini_Lab/Mouse_ATAC/human_mouse_DAR_ortholog_module_enrichments.tsv")               
+    
 ```
 
 ##timepoint analysis
@@ -917,7 +999,7 @@ write_delim(x = as.data.frame(great_df) , file= "/Users/alexanderokamoto/Desktop
 ```
 
 ##TF PART
-
+```{r}
 #load libraries for TF analysis
 library("monaLisa")
 library(TFBSTools)
@@ -1032,6 +1114,53 @@ early_tf_corr <- ggplot(data = early_TF_df4 %>% dplyr::filter(cluster != 0),
   scale_fill_gradient(low = "white", high = "darkred")
   # +
 #scale_size_continuous(breaks = c(2, 3.5, 5))
+```
 
+Deeper dive into digit I
+```{r}
+human_DARs_digI <- human_DARs %>% 
+  dplyr::filter(tissue1 %in% c("METATARSAL1E", "METATARSAL1L", "FOOTPHALANGES1E", "FOOTPHALANGES1L", "METACARPAL1E", "METACARPAL1L", "HANDPHALANGES1E", "HANDPHALANGES1L")) %>% 
+  dplyr::filter(tissue2 %in% c("METATARSAL2E", "METATARSAL2L", "FOOTPHALANGES2E", "FOOTPHALANGES2L", "METACARPAL2E", "METACARPAL2L", "HANDPHALANGES2E", "HANDPHALANGES2L"))
+
+#get total number of dig 1 DEGs
+digI_DARs <- unique(human_DARs_digI$peak)
+length(digI_DARs)
+
+dig1_enrichment = data.frame()
+#mouse_module = NA, human_module = NA, shared_genes =NA, p_val = NA)
+
+for (j in 0:7){
+  total_peaks <- length(unique(c(human_modules_early$peak, digI_DARs)))
+  shared_peaks <- length(which(human_modules_early$peak[which(human_modules_early$cluster == j)] %in% dig1_DARs))
+  cluster_peaks <- length(which(human_modules_early$cluster == j))
+  digI_peaks <- length(dig1_DARs)
+  prob <- phyper(shared_peaks - 1 , cluster_peaks, total_peaks - cluster_peaks, digI_peaks, lower.tail=FALSE)
+  if (prob < 0.05){
+   print(paste(shared_peaks, " shared peaks with module ", i, sep = "")) 
+   print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+   results = data.frame( human_module = paste("Early", j), shared_peaks = shared_peaks, p_val = formatC(prob, format = "e"))
+   dig1_enrichment <- rbind(dig1_enrichment, results)
+    }
+  }
+for (j in 0:7){
+  total_peaks <- length(unique(c(human_modules_late$peak, digI_DARs)))
+  shared_peaks <- length(which(human_modules_late$peak[which(human_modules_late$cluster == j)] %in% dig1_DARs))
+  cluster_peaks <- length(which(human_modules_late$cluster == j))
+  digI_peaks <- length(dig1_DARs)
+  prob <- phyper(shared_peaks - 1 , cluster_peaks, total_peaks - cluster_peaks, digI_peaks, lower.tail=FALSE)
+  if (prob < 0.05){
+   print(paste(shared_peaks, " shared peaks with module ", i, sep = "")) 
+   print(paste(formatC(prob, format = "e"), " probability", sep = ""))
+   results = data.frame( human_module = paste("late", j), shared_peaks = shared_peaks, p_val = formatC(prob, format = "e"))
+   dig1_enrichment <- rbind(dig1_enrichment, results)
+    }
+  }
+
+
+write_tsv(dig1_enrichment, file = "~/Desktop/Capellini_Lab/Human_ATAC/human_dig1_DAR_module_enrichments.tsv")
+
+binom.test(length(which(human_DARs_digI$stat> 0)), nrow(human_DARs_digI), p = 0.5, alternative = "two.sided", conf.level = 0.95)
+
+```
 
 
