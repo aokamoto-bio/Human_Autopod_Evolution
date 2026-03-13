@@ -259,11 +259,31 @@ mat <- assay(rsem.vst)
 mm <- model.matrix(~replicate, colData(rsem.vst))
 mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst)$replicate)
 
-
 assay(rsem.vst) <- mat
 
 # perform a PCA on the data in assay(x) for the selected genes
 mouse_sample_pca <- prcomp(t(assay(rsem.vst)))
+
+
+#investigate most associated genes 
+refgenes <- read.table("~/Desktop/Capellini_Lab/Capellini_Lab_Peak_Sets/Other_Peak_sets/mm10_refGene.txt")
+
+loadings <- as.data.frame(mouse_sample_pca$rotation)
+top_genes_pc1 <- rownames(loadings[order(abs(loadings$PC1), decreasing = TRUE), ])[1:50]
+top_genes_pc2 <- rownames(loadings[order(abs(loadings$PC2), decreasing = TRUE), ])[1:50]
+
+top_genes_pc1_annot <- mouse_annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc1)
+top_genes_pc2_annot <- mouse_annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc2)
+
+top_genes_pc1_GO <- simple_go_analysis(top_genes_pc1_annot$mgi_symbol, universe = refgenes$V13, database = org.Mm.eg.db )
+top_genes_pc2_GO <- simple_go_analysis(top_genes_pc2_annot$mgi_symbol, universe = refgenes$V13, database = org.Mm.eg.db )
+top_genes_pc1_GO$GeneRatio <- paste("'", top_genes_pc1_GO$GeneRatio, "'", sep ="")
+top_genes_pc2_GO$GeneRatio <- paste("'", top_genes_pc2_GO$GeneRatio, "'", sep ="")
+
+write_tsv(x = top_genes_pc1_annot, file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_top_genes_pc1.tsv")
+write_tsv(x = top_genes_pc2_annot, file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_top_genes_pc2.tsv")
+write_tsv(x = top_genes_pc1_GO, file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_top_genes_pc1_GO.tsv")
+write_tsv(x = top_genes_pc2_GO, file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_top_genes_pc2_GO.tsv")
 
 # Variance explained by PCs
 mouse_pc_eigenvalues2 <- mouse_sample_pca$sdev^2
