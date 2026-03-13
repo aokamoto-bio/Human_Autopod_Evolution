@@ -352,19 +352,19 @@ mME = MEs0 %>%
   ) %>% 
   group_by(treatment, color) %>% 
   summarize(avg_val = mean(value))
-```
 
-## Plot output
-
-```{r}
 #create key to convert between cluster color and number
 #Note: The grey color/module 0 is reserved for unassigned genes
 color_cluster_key <- module_df %>% 
   group_by(cluster) %>% 
   summarize(gene_n = n()) 
 
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "ensembl_gene_id") %>% pivot_longer(cols = `kME0`:`kME13`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
 write_delim(module_df %>% left_join(color_cluster_key) %>% 
-  left_join(mouse_annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, mgi_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% arrange(cluster) ,
+  left_join(mouse_annot, by = join_by(gene_id == ensembl_gene_id)) %>% dplyr::select(gene_id, mgi_symbol, cluster) %>% dplyr::rename(ensembl_gene_id= gene_id) %>% left_join(module_membership, by = join_by(ensembl_gene_id, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
             file = "~/Desktop/Capellini_Lab/Mouse Autopod RNA/mouse_gene_clusters.tsv",
             delim = "\t")
             
