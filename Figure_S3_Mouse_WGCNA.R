@@ -225,7 +225,23 @@ mouse_plot <- ggdraw() +
                   size = 12,
                   x = c((0:6*skel_w), (0:2*skel_w), (0:6*skel_w), (0:5*skel_w), 0, 0.6), 
                   y = c(rep(1, times =7), rep(1-skel_h, times =3),  rep(1-skel_h*2, times =7), rep(1-skel_h*3, times =6), 1-skel_h*4, 1-skel_h*4)
-  ) + 
+  ) + #now add gene names
+  draw_plot_label(
+    label = c("Rpl18", "Ipo9", "Wnt5a", "Nid2", "C1qtnf3", "Lypd3", "Mdk", "Gm28586", "Kcns1", "Tnip2", "Nipal1", "Nron", "Atp6v0c-ps2"),
+    fontface = "italic",
+    size = 10,
+    x = c((0:6*(skel_w)) + 0.05, (0:1*(skel_w)) + 0.05, (2:5*(skel_w)) + 0.07),
+    y = c(rep(1-skel_h*2, times =7), rep(1-skel_h*3, times =6)),
+    hjust = 0
+  ) + #add GO enrichments
+  draw_plot_label(
+    label = c("ECM", "limb dev.", "morphogen.", "bone dev.", "skeletal dev.", "metallop.", "osteo. diff.", "none", "abnorm. phal.", "none"),
+    size = 8,
+    x = c((0:6*(skel_w)) + 0.05, (0:1*(skel_w)) + 0.05, (2*(skel_w)) + 0.07),
+    y = c(rep(1, times =7), rep(1-skel_h, times =3)),
+    hjust = 0, 
+    vjust = 2,
+  ) +
   bgcolor("white")
 
 ggsave(plot = mouse_plot + panel_border(color = "black", size = 1), 
