@@ -1,7 +1,7 @@
 ---
 title: "Human ATAC Data Analysis"
 author: "Alexander Okamoto"
-date: "2026-3-13"
+date: "2026-4-2"
 output: html_document
 ---
 
@@ -1163,4 +1163,156 @@ binom.test(length(which(human_DARs_digI$stat> 0)), nrow(human_DARs_digI), p = 0.
 
 ```
 
+#combined timepoint all genes WGCNA analysis
 
+```{r}
+#glm design
+# Again, we can include more things beside tissue, like we could look at the effect of tissue *and* age, or we could control for sex here. 
+design <- formula(~replicate + limbtype)
+#build DESeqDataSet
+rsem.in <- DESeqDataSetFromMatrix(countData = human_ATAC_peak_ct, colData = sample_info, design = design, tidy = T)
+#, test = "LRT", reduced = reducedest--pairwise does not need it. Or post-hoc tests can compare between pairs. 
+rsem.de <- DESeq(rsem.in)
+
+# Retrieve the normalized data from the `DESeqDataSet`
+
+#plots related to dispersion, built in function to DESEQ
+rsem.vst_total <- vst(rsem.de)
+mat <- assay(rsem.vst_total)
+mm <- model.matrix(~replicate, colData(rsem.vst_total))
+mat <- limma::removeBatchEffect(mat, batch=colData(rsem.vst_total)$replicate)
+assay(rsem.vst_total) <- mat
+
+normalized_counts_total <- assay(rsem.vst_total)
+
+#library(WGCNA)
+input_mat = t(normalized_counts_total)
+
+# Choose a set of soft-thresholding powers
+powers = seq(from = 30, to = 50, by = 2)
+
+# Call the network topology analysis function
+sft = pickSoftThreshold(
+  input_mat,             # <= Input data
+  #blockSize = 30,
+  powerVector = powers,
+  verbose = 5
+  )
+
+par(mfrow = c(1,2));
+cex1 = 0.9;
+
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence")
+)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red"
+)
+abline(h = 0.90, col = "red")
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+
+picked_power = min(which(sft$fitIndices$SFT.R.sq > 0.9))
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(input_mat,                # <= input here
+
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = F,
+                          saveTOMFileBase = "ER",
+
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+module_df_total <- data.frame(
+  peak = names(netwk$colors),
+  cluster = netwk$colors,
+  color = labels2colors(netwk$colors)
+)
+
+
+# Get Module Eigengenes per cluster
+MEs <- moduleEigengenes(input_mat, netwk$colors)$eigengenes
+
+#calculate correlation across limbtype
+correlate_limb_eigen_genes(MEs, save_file = T, filename = "~/Desktop/Capellini_Lab/Human_ATAC/total_ATAC_Limbtype_Module_Correlation.csv")
+
+MEs0 <- MEs
+
+# Reorder modules so similar modules are next to each other
+#MEs0 <- orderMEs(MEs0)
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+# Add treatment names
+MEs0$treatment <- sample_info %>% mutate(sample_tp = paste(tissue, timepoint, sep ="_")) %>% pull(sample_tp)
+
+# tidy & plot data
+mME = MEs0 %>%
+  pivot_longer(-treatment) %>%
+  mutate(
+    color = gsub("ME", "", name),
+    color = factor(color, levels = module_order) 
+  ) %>% 
+  group_by(treatment, color) %>% 
+  summarize(avg_val = mean(value))
+
+#create key to convert between cluster color and number
+#Note: The grey color/module 0 is reserved for unassigned genes
+color_cluster_key <- module_df_total %>% 
+  group_by(cluster) %>% 
+  summarize(peak_n = n()) 
+
+# get module membership
+module_membership <- signedKME(datExpr = input_mat, datME = MEs) %>% rownames_to_column(var = "peak") %>% pivot_longer(cols = `kME0`:`kME20`, values_to = "Pearson_corr", names_to = "cluster") %>% mutate(cluster = as.double(gsub(pattern = "kME", replacement = "", cluster)))
+
+
+write_delim(module_df_total %>% left_join(color_cluster_key) %>% 
+ dplyr::select(peak, cluster) %>% left_join(module_membership, by = join_by(peak, cluster)) %>% arrange(cluster, desc(Pearson_corr)),
+            file = "~/Desktop/Capellini_Lab/Human_ATAC/human_total_peak_modules.tsv",
+            delim = "\t")
+
+for(i in min(color_cluster_key$cluster):max(color_cluster_key$cluster)){
+
+  mME_temp <- mME %>% mutate(cluster = as.numeric(unfactor(color))) %>% 
+    dplyr::left_join(color_cluster_key) %>% 
+    dplyr::filter(cluster == i) %>% 
+                          mutate(value = avg_val) %>% 
+                          mutate(tissue = treatment)
+  
+plot_autopod_tp_expression(mME_temp %>% 
+                          dplyr::select(tissue, value), 
+                        file_name = paste("human_total_peak_cluster_", i, sep = ""), opt_text = paste(mME_temp$peak_n[1], " peaks", sep =""),
+                       center =T 
+                        )
+}
+
+```
