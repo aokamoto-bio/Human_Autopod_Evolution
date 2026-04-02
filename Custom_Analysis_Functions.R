@@ -488,7 +488,7 @@ HEEL
 } #end function
 
 
-plot_autopod_tp_expression <- function(expr_df, file_name = "test_plot", opt_text = ""){
+plot_autopod_tp_expression <- function(expr_df, file_name = "test_plot", opt_text = "", min_color_value = NA, max_color_value = NA, center = F, center_color_value = NA){
   #expr_df needs to be a dataframe with a column of tissue (in format HP1 for hand phalanges, digit I, HM for metacarapl) and a value column
   require(grid)
   require(magick)
@@ -773,8 +773,25 @@ HEEL
 '
   
   #create color range
-  fun_color_range <- colorRampPalette(c("blue", "red"))    
-  my_colors <- fun_color_range(101)
+  #if centered, middle value is gray, otherwise, use red to blue
+  if(center == T){
+    fun_color_range1 <- colorRampPalette(c("gray", "red"))   
+    fun_color_range2 <- colorRampPalette(c("blue", "gray"))  
+    if(is.na(center_color_value)){
+      my_colors <- c(fun_color_range2(50), "gray", fun_color_range1(50))
+    } else{
+      min_dist <- sqrt( ( min_color_value - center_color_value) ^2 )
+      max_dist <- sqrt( ( max_color_value - center_color_value) ^2 )
+      min_count <- round(min_dist/(max_dist + min_dist)*100, digits = 0)
+      max_count <- 100 - min_count
+      my_colors <- c(fun_color_range2(100)[(100-min_count-1):100], fun_color_range1(100)[2:max_count + 1])
+      
+    }
+    
+  } else{
+    fun_color_range <- colorRampPalette(c("blue", "red"))   
+    my_colors <- fun_color_range(101)
+  }
   
   #create a version of the svg file to edit
   hand_skeleton_early <- hand_skeleton
@@ -821,6 +838,7 @@ HEEL
   png(filename=paste("~/Desktop/Autopod_Skeleton_Figures/", file_name, "_early.png", sep = ""), width = 360, height = 360)
   
   grid::grid.newpage()
+  seq()
   
   #axis(1)
   pushViewport(viewport(angle=90, width=0.4,height=0.4, x = 0.35))
@@ -866,9 +884,9 @@ HEEL
   # Add scale min and max values
   text(5, 1, as.character(round(min(expr_df$value), digits = 2)))
   text(95, 1, as.character(round(max(expr_df$value), digits = 2)))
-  text(50, 11, bquote(
+  text(50, 12, bquote(
     italic(.(opt_text))), cex = 3)
-  
+
   # Back to the original color
   par(bg = "white")
   dev.off()
@@ -878,8 +896,8 @@ HEEL
   plt_late <- image_read(path = paste("~/Desktop/Autopod_Skeleton_Figures/", file_name, "_late.png", sep = "")) %>%
     image_ggplot() + theme(plot.margin = unit(c(-2,-1,-4,-2), "cm"))
   
-  final_plt <- plot_grid(plt_early, plt_late, nrow = 2 , ncol = 1, labels = c("Early", "Late"), byrow = T)
-  
+  final_plt <- plot_grid(plt_early, plt_late, nrow = 2 , ncol = 1,  byrow = T)
+  #labels = c("Early", "Late"),
   ggsave(final_plt, device = "png", filename = paste(file_name, ".png", sep = ""), path = "~/Desktop/Autopod_Skeleton_Figures/", width = 5, height = 10)
   
   #cleanup
@@ -887,6 +905,7 @@ HEEL
   system(paste("rm ~/Desktop/Autopod_Skeleton_Figures/", file_name, "_late.png", sep = ""))
   
 } #end function
+
 
 
 #perform Gene Ontology (GO) enrichment
