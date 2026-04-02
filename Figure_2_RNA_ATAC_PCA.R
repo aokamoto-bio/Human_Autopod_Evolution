@@ -1,6 +1,6 @@
-#create PCA/Volcano plot figure showing human RNA and ATAC-seq information
+#create supplementary figure showing human ATAC information
 #Alexander Okamoto
-#December 10, 2025
+#April 2, 2026
 
 #load packages
 library(readxl)
@@ -11,6 +11,23 @@ library(ggpubr)
 library(DESeq2)
 library(ggrepel)
 library(ggbreak) #for breaking axes on plots
+
+#load custom functions for analysis
+source("~/Desktop/Capellini_Lab/Weekly_Coding/RNA_Analysis_Functions.R") 
+
+require(biomaRt)
+hs_ensembl <- useMart('ensembl', dataset = 'hsapiens_gene_ensembl')
+
+#make annotation data frame
+#necessary for GO enrichment
+annot <- getBM(
+  attributes = c(
+    'hgnc_symbol',
+    'ensembl_gene_id',
+    'gene_biotype'),
+  filters = 'ensembl_gene_id',
+  values = ct$ensembl_gene_id,
+  mart = hs_ensembl)
 
 #load read count information
 human_ATAC_peak_counts <- read.delim(file = "~/Desktop/Capellini_Lab/Human_ATAC/human_ATAC_peaks_countMatrix.txt", header = T)
@@ -88,7 +105,6 @@ human_pc_scores_full$tissue_type <- gsub(pattern = "FL_phalanges", replacement =
 human_pc_scores_full$tissue_type <- gsub(pattern = "HL_phalanges", replacement = "Foot Phalanges", x = human_pc_scores_full$tissue_type)
 human_pc_scores_full$tissue_type <- factor(human_pc_scores_full$tissue_type, levels = c("Metatarsal", "Metacarpal", "Hand Phalanges", "Foot Phalanges"))
 
-
 #make the plot
 human_atac_pca <- human_pc_scores_full %>% 
   ggplot(aes(x = PC1, y = PC2, shape = digit, color = tissue_type, fill = tissue_type, alpha = as.character(timepoint))) + 
@@ -116,9 +132,45 @@ timepoint_DARs <- runDESEQ2_df_hs_atac(design_in = formula(~timepoint), count_da
 timepoint_DARs$expressed <- "Not Significant"
 timepoint_DARs$expressed[timepoint_DARs$log2FoldChange < -0.58 & timepoint_DARs$padj < 0.01] <- "Upregulated early"
 timepoint_DARs$expressed[timepoint_DARs$log2FoldChange > 0.58 & timepoint_DARs$padj < 0.01] <- "Upregulated late"
+timepoint_DARs$peak <- rownames(timepoint_DARs)
 
-atac_stage_volcano <- ggplot(data = timepoint_DARs, 
-                        aes( x = log2FoldChange, y =-log10(padj), colour = expressed)) + 
+top_DAR_n <- 10
+top_upDARs <- timepoint_DARs %>% dplyr::filter(expressed == "Upregulated late") %>% arrange(padj) %>% head(n = top_DAR_n) 
+top_downDARs <- timepoint_DARs %>% dplyr::filter(expressed =="Upregulated early") %>% arrange(padj) %>% head(n = top_DAR_n)
+
+top_upDARs %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+  distinct() %>% 
+  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_upDARs_hg38.bed", ncol = 3)
+
+top_downDARs %>% 
+  separate_wider_delim(peak, ":", names = c("chr", "range")) %>% 
+  separate_wider_delim(range, "-", names = c("start", "end")) %>% 
+  dplyr::select(chr, start, end) %>% 
+  distinct() %>% 
+  write_bed(filename = "/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_downDARs_hg38.bed", ncol = 3)
+
+
+#get nearest expressed genes
+refgene_locations <- "~/Desktop/Capellini_Lab/Capellini_Lab_Peak_Sets/Other_Peak_sets/hg38_refGene.sorted.bed"
+system(paste("bedtools sort -i /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_upDARs_hg38.bed | bedtools closest -a stdin -b", refgene_locations, "> /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_upDARs_nearest_genes_hg38.bed", sep = " "))
+system(paste("bedtools sort -i /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_downDARs_hg38.bed | bedtools closest -a stdin -b", refgene_locations, "> /Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_downDARs_nearest_genes_hg38.bed", sep = " "))
+
+top_upDARs_nearest_genes <- read_delim("/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_upDARs_nearest_genes_hg38.bed", col_names = F)
+top_downDARs_nearest_genes <- read_delim("/Users/alexanderokamoto/Desktop/Capellini_Lab/Human_ATAC/human_top_downDARs_nearest_genes_hg38.bed", col_names = F)
+gene_labels <- rbind(top_upDARs_nearest_genes, top_downDARs_nearest_genes) %>% 
+  mutate(peak = paste(X1, ":", X2, "-", X3, sep ="")) %>% 
+  rename(nearest_gene = X7) %>% dplyr::select(peak, nearest_gene)
+
+#confirm nearest genes are expressed
+length(which(gene_labels$nearest_gene %in% rsem_annot_2$hgnc_symbol))
+
+timepoint_DARs2 <-merge(x=timepoint_DARs, y = gene_labels, all.x =T) %>% unique()
+
+atac_stage_volcano <- ggplot(data = timepoint_DARs2, 
+                        aes( x = log2FoldChange, y =-log10(padj), colour = expressed, label = nearest_gene)) + 
   geom_point(size = 0.1) +
   scale_color_manual(values = c("grey", "#00AFBB", "brown3"))+ 
   geom_hline(yintercept = -log10(0.01), 
@@ -129,6 +181,12 @@ atac_stage_volcano <- ggplot(data = timepoint_DARs,
        y = expression("-log"[10]*" adj. p-value"), 
        color = NULL) + 
   theme_classic() +
+  geom_text_repel(max.overlaps = Inf, 
+                  show.legend = FALSE, 
+                  size = 2, 
+                  force = 1.5, 
+                  force_pull = 0.5, 
+                  min.segment.length = 0, color = "black") +
   theme(legend.position="bottom", 
         legend.box = "vertical", 
         legend.margin=margin(), 
@@ -209,8 +267,10 @@ loadings <- as.data.frame(human_sample_pca$rotation)
 top_genes_pc1 <- rownames(loadings[order(abs(loadings$PC1), decreasing = TRUE), ])[1:50]
 top_genes_pc2 <- rownames(loadings[order(abs(loadings$PC2), decreasing = TRUE), ])[1:50]
 
+
 top_genes_pc1_annot <- annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc1)
 top_genes_pc2_annot <- annot %>% dplyr::filter(ensembl_gene_id %in% top_genes_pc2)
+
 
 top_genes_pc1_GO <- simple_go_analysis(top_genes_pc1_annot$hgnc_symbol)
 top_genes_pc2_GO <- simple_go_analysis(top_genes_pc2_annot$hgnc_symbol)
@@ -221,7 +281,7 @@ write_tsv(x = top_genes_pc1_annot, file = "~/Desktop/Capellini_Lab/Human Autopod
 write_tsv(x = top_genes_pc2_annot, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc2.tsv")
 write_tsv(x = top_genes_pc1_GO, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc1_GO.tsv")
 write_tsv(x = top_genes_pc2_GO, file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_top_genes_pc2_GO.tsv")
-                    
+
 # Variance explained by PCs
 human_pc_eigenvalues <- human_sample_pca$sdev^2
 
@@ -316,7 +376,7 @@ runDESEQ2_df_hs <- function(design_in, count_data, col_data, padj.cutoff = 0.05)
   rsem_cols <-as.data.frame(row.names(rsem.in))
   colnames(rsem_cols) <- 'ensembl_gene_id'
   require(biomaRt)
-  hs_ensembl <- useMart('ensembl', dataset = 'hsapiens_gene_ensembl', host = "https://asia.ensembl.org")
+  hs_ensembl <- useMart('ensembl', dataset = 'hsapiens_gene_ensembl')
   
   #make annotation data frame
   annot <- getBM(
@@ -431,7 +491,7 @@ figure2 <- ggdraw() +
 
 #save resulting figure 
 ggsave(plot = figure2 + panel_border(color = "black", size = 1), 
-       filename = "~/Dropbox/Autopod Paper/Autopod_Paper_Figures/Figure_2_PCA_volcano.png", 
+       filename = "~/Dropbox/Autopod Paper/Autopod_Paper_Figures/Figure_2_v3.png", 
        device = "png", 
        dpi = 300, 
        height = 150, width = 180, units = "mm")
