@@ -1,6 +1,6 @@
 #create supplementary figure showing human autopod RNA-seq wgcna results 
 #Alexander Okamoto
-#March 13, 2025
+#April 4, 2026
 
 #load packages
 library(tidyverse)
@@ -221,9 +221,9 @@ human_late_plot <- ggdraw() +
                   y = c(rep(c(1, 1-skel_h), each =7), rep(1-2*skel_h, 5), 1-skel_h*3, 1-skel_h*3)
                   ) + #now add gene names
   draw_plot_label(
-    label = c("AHR", "MATN1", "SERINC1", "SEC22B", "ZNF518A", "MAN2C1", "CDH5", "RYR1", "RPS25", "ZFP36", "INSC", "PITX1"),
-    fontface = "italic",
-    size = 10,
+    label = c("synapse org.", "ossification", "none", "none", "organ. fiss.", "homol. rec.", "endo. dev.", "muscle dev.", "cytop. trans.", "fat cell diff.", "bone dev.", "prox-dist. patt. form."),
+    #fontface = "italic",
+    size = 8,
     x = c(0:6*skel_w + 0.05, (0:1*skel_w) + 0.05, (2:4*skel_w) + 0.07),
     y = c(rep(1-skel_h, times = 7), rep(1-2*skel_h, 5)),
     hjust = 0
@@ -237,6 +237,8 @@ human_late_plot <- ggdraw() +
     vjust = 2,
   ) + 
   bgcolor("white")
+
+human_late_plot 
 
 ggsave(plot = human_late_plot + panel_border(color = "black", size = 1), 
        filename = "~/Dropbox/Autopod Paper/Autopod_Paper_Figures/Fig4_Human_wgcna_late.png", 
