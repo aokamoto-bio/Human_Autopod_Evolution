@@ -1,6 +1,6 @@
-#create figure showing human autopod ATAC-seq WGCNA results (early)
+#create supplementary figure showing human autopod ATAC-seq WGCNA results 
 #Alexander Okamoto
-#March 13, 2025
+#April 2, 2026
 
 #load packages
 library(tidyverse)
@@ -10,6 +10,7 @@ library(grid) # for plotting options
 library(magick) # for adding images to ggplots
 library(AnnotationDbi)
 library(org.Hs.eg.db)
+library(rGREAT)
 
 #early modules
 DAR_plt1 <- image_read("~/Desktop/Autopod_Skeleton_Figures/human_early_DAR_cluster_1.png") %>%
@@ -115,8 +116,8 @@ early_wgcna_corr_great <- ggplot(data = mod_enrich_df2,
          "-log10(Padj)") + 
   scale_x_discrete(drop=FALSE) + 
   scale_y_discrete(drop=FALSE) +
-  scale_color_gradient(low = "gray", high = "darkgreen",)# +
-  #scale_size_continuous(breaks = c(2, 3.5, 5))
+  scale_color_gradient(low = "gray", high = "darkgreen") +
+  scale_size_continuous(breaks = c(1.2, 1.6, 2))
 
 #now for TF enrichment
 RNA_modules <- read.table(file = "~/Desktop/Capellini_Lab/Human Autopod RNA/human_early_gene_modules.tsv", header = T, sep = "\t")
@@ -174,9 +175,9 @@ human_early_plot <- ggdraw() +
                   y = c(rep(1, times = 7), rep(1-skel_h, times = 4), 1-skel_h*2, 1-skel_h*2)
   ) + #now add gene names
   draw_plot_label(
-    label = c("IL17RD", "COL11A2", "EGR2", "KRT1"),
-    fontface = "italic",
-    size = 10,
+    label = c("synapse org.", "ECM", "fat cell diff.", "skin dev."),
+    #fontface = "italic",
+    size = 8,
     x = c((0:3*(skel_w)) + 0.05),
     y = c(rep(1-skel_h, times =4)),
     hjust = 0
@@ -187,7 +188,6 @@ human_early_plot <- ggdraw() +
     x = c((0:6*(skel_w)) + 0.05),
     y = c(rep(1, times =7)),
     hjust = 0, 
-    vjust = 2,
   ) + 
   bgcolor("white")
 
@@ -196,3 +196,4 @@ human_early_plot
 ggsave(plot = human_early_plot + panel_border(color = "black", size = 1), 
        filename = "~/Dropbox/Autopod Paper/Autopod_Paper_Figures/Fig3_Human_wgcna_early.png", 
        device = "png", dpi = 300, height = 144, width = 180, units = "mm")
+
