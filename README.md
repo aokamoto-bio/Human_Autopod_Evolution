@@ -1,8 +1,8 @@
 # Human_Autopod_Evolution
 
-Code for the preprint: 
+Code for the article: 
 
-Okamoto, Alexander, Gayani Senevirathne, Pushpanathan Muthuirulan, Campbell Rolian, Ian Glass, Birth Defects Research Laboratory, and Terence Capellini. 2025. “Complex Genetic Architecture Underlies Human Hand and Foot Evolution.” Research Square. https://doi.org/10.21203/rs.3.rs-7124496/v1.
+A.S. Okamoto, G. Senevirathne, P. Muthuirulan, C. Rolian, I.A. Glass, Birth Defects Research Laboratory, & T.D. Capellini,  Modular genetic architecture underlies human hand and foot evolution, Proc. Natl. Acad. Sci. U.S.A. 123 (20) e2603297123, https://doi.org/10.1073/pnas.2603297123 (2026).
 
 Initial processing of the sequencing data was performed on the Harvard FAS computing cluster. Other parts of this script were written for a smaller, internal lab computing cluster. It may not work on a personal computer.
 
